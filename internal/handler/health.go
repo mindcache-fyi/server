@@ -34,7 +34,7 @@ func NewHealthHandler(db *sql.DB, storage *service.Storage, llm service.LLM) *He
 // @Router / [get]
 func (h *HealthHandler) Welcome(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte("Hello World!"))
+	_, _ = w.Write([]byte("Hello World!"))
 }
 
 // Health returns basic liveness information including uptime in seconds.

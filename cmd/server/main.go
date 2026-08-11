@@ -170,8 +170,12 @@ func main() {
 		slog.Error("server shutdown error", "error", err)
 	}
 	kv.Stop()
-	storage.Close()
-	db.Close()
+	if err := storage.Close(); err != nil {
+		slog.Error("storage close error", "error", err)
+	}
+	if err := db.Close(); err != nil {
+		slog.Error("database close error", "error", err)
+	}
 }
 
 func setupLogger(prod bool) {

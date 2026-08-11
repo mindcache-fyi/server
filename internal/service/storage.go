@@ -79,7 +79,9 @@ func (s *Storage) DeleteDir(ctx context.Context, prefix string) error {
 		}
 	}
 	if s.localRoot != "" {
-		os.RemoveAll(filepath.Join(s.localRoot, prefix))
+		if err := os.RemoveAll(filepath.Join(s.localRoot, prefix)); err != nil {
+			return err
+		}
 	}
 	return nil
 }

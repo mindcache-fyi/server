@@ -87,7 +87,7 @@ func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 
 	respBody, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(respBody))
 	fmt.Printf("\n====== [📥 LLM Response] ======\nStatus: %d\nBody: %s\n==============================\n\n",
 		resp.StatusCode, prettyJSON(respBody))

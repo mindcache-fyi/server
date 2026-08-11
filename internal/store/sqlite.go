@@ -93,7 +93,7 @@ func (r *MindcacheRepo) List(ctx context.Context) ([]model.Mindcache, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query mindcaches: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	mindcaches := make([]model.Mindcache, 0)
 	for rows.Next() {
