@@ -1,0 +1,45 @@
+version: 2
+
+project_name: mindcache-server
+
+builds:
+  - id: server
+    main: ./cmd/server
+    binary: server
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.Version={{ .Version }} -X main.GitCommit={{ .ShortCommit }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+release:
+  github:
+    owner: mindcache-fyi
+    name: server
+
+dockers_v2:
+  - images:
+      - "ghcr.io/mindcache-fyi/server:{{ .Version }}"
+      - "ghcr.io/mindcache-fyi/server:latest"
+    dockerfile: Dockerfile.release
+    extra_files:
+      - public
+    platforms:
+      - linux/amd64
+      - linux/arm64

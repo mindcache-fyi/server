@@ -1,0 +1,26 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  pre_cmd = ["make swagger"]
+  entrypoint = "./tmp/main"
+  cmd = "go build -o ./tmp/main ./cmd/server"
+  delay = 1000
+  exclude_dir = ["tmp", "data", "dist", "bin", "docs", "public"]
+  exclude_regex = ["_test\\.go"]
+  include_ext = ["go", "sql"]
+  kill_delay = "0s"
+  send_interrupt = true
+  stop_on_error = true
+
+[log]
+  time = false
+
+[color]
+  main = "magenta"
+  watcher = "cyan"
+  build = "yellow"
+  runner = "green"
+
+[misc]
+  clean_on_exit = true

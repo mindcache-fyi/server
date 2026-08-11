@@ -1,0 +1,363 @@
+basePath: /
+definitions:
+  model.AnalyseRequest:
+    properties:
+      chat:
+        allOf:
+        - $ref: '#/definitions/model.Chat'
+        description: Chat payload from the extension
+    type: object
+  model.AnalyseResponse:
+    properties:
+      mindcaches:
+        description: Related (matched) mindcaches
+        items:
+          $ref: '#/definitions/model.Mindcache'
+        type: array
+      topicMindcacheMap:
+        additionalProperties:
+          items:
+            type: string
+          type: array
+        description: Per-topic matched mindcache IDs (topicId → mindcacheId[])
+        type: object
+      topics:
+        description: Extracted topics
+        items:
+          $ref: '#/definitions/model.Topic'
+        type: array
+    type: object
+  model.Chat:
+    properties:
+      chatId:
+        description: Unique chat identifier
+        type: string
+      content:
+        description: Full chat content as plain text
+        type: string
+      provider:
+        description: 'Provider enum: gemini, claude, deepseek, yuanbao, chatgpt'
+        enum:
+        - gemini
+        - claude
+        - deepseek
+        - yuanbao
+        - chatgpt
+        type: string
+      sourceUrl:
+        description: Source URL of the conversation
+        type: string
+      title:
+        description: Chat title
+        type: string
+    type: object
+  model.ClearAnalyseResponse:
+    properties:
+      cleared:
+        description: Whether cache entries were cleared
+        type: boolean
+    type: object
+  model.CreateRequest:
+    properties:
+      topicId:
+        description: Source topic ID from /analyse response
+        type: string
+    type: object
+  model.CreateResponse:
+    properties:
+      error:
+        description: Error message when success is false
+        type: string
+      mindcacheId:
+        description: Created mindcache ID
+        type: string
+      success:
+        type: boolean
+    type: object
+  model.ErrorResponse:
+    properties:
+      error:
+        description: Error description
+        type: string
+    type: object
+  model.GetResponse:
+    properties:
+      mainContent:
+        description: Main markdown content
+        type: string
+      mindcache:
+        $ref: '#/definitions/model.Mindcache'
+    type: object
+  model.ListResponse:
+    properties:
+      mindcaches:
+        description: All mindcaches
+        items:
+          $ref: '#/definitions/model.Mindcache'
+        type: array
+    type: object
+  model.Mindcache:
+    properties:
+      brief:
+        description: Brief summary
+        type: string
+      id:
+        description: Unique mindcache identifier
+        type: string
+      sourceUrls:
+        description: Source conversation URLs
+        items:
+          type: string
+        type: array
+      updatedAt:
+        description: Last update timestamp
+        type: string
+    type: object
+  model.Topic:
+    properties:
+      brief:
+        description: Brief summary of the topic
+        type: string
+      sourceChat:
+        description: Source chat ID this topic was extracted from
+        type: string
+      topicId:
+        description: Unique topic identifier
+        type: string
+    type: object
+  model.UpdateRequest:
+    properties:
+      mindcacheId:
+        description: Target mindcache ID
+        type: string
+      topicId:
+        description: Source topic ID from /analyse response
+        type: string
+    type: object
+  model.UpdateResponse:
+    properties:
+      error:
+        description: Error message when success is false
+        type: string
+      mindcacheId:
+        description: Target mindcache ID
+        type: string
+      success:
+        type: boolean
+    type: object
+  service.LLMConfig:
+    properties:
+      baseUrl:
+        type: string
+      configured:
+        type: boolean
+      maxConcurrency:
+        type: integer
+      model:
+        type: string
+    type: object
+host: localhost:9000
+info:
+  contact: {}
+  description: Agent backend service for knowledge capture and recall.
+  title: Mindcache FYI
+  version: "1.0"
+paths:
+  /:
+    get:
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: Hello World!
+          schema:
+            type: string
+      summary: Welcome endpoint
+      tags:
+      - root
+  /health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Health check
+      tags:
+      - root
+  /v1/api/analyse:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Chat payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/model.AnalyseRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.AnalyseResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/model.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/model.ErrorResponse'
+      summary: Analyse a chat and return matching topics and mindcaches
+      tags:
+      - analyse
+  /v1/api/analyse/clear:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Chat payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/model.AnalyseRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.ClearAnalyseResponse'
+      summary: Clear cached analysis result for a chat
+      tags:
+      - analyse
+  /v1/api/create:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Topic ID
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/model.CreateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.CreateResponse'
+      summary: Create a new mindcache from a cached topic
+      tags:
+      - mindcache
+  /v1/api/debug/kvcache:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: View all cached chats and topics (KV debug)
+      tags:
+      - debug
+  /v1/api/debug/llm:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.LLMConfig'
+      summary: Return LLM provider configuration (no API key)
+      tags:
+      - debug
+  /v1/api/delete/{id}:
+    delete:
+      parameters:
+      - description: Mindcache ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Delete a mindcache
+      tags:
+      - mindcache
+  /v1/api/get/{id}:
+    get:
+      parameters:
+      - description: Mindcache ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.GetResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/model.ErrorResponse'
+      summary: Get a single mindcache with its content
+      tags:
+      - mindcache
+  /v1/api/list:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.ListResponse'
+      summary: List all mindcaches
+      tags:
+      - mindcache
+  /v1/api/update:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Mindcache ID and Topic ID
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/model.UpdateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.UpdateResponse'
+      summary: Append a cached topic to an existing mindcache
+      tags:
+      - mindcache
+schemes:
+- http
+swagger: "2.0"
