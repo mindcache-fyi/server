@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/mindcache-fyi/server/internal/cache"
@@ -96,6 +97,7 @@ func (s *MindcacheService) CreateFromTopic(ctx context.Context, topicId string) 
 		return s.doCreateFromTopic(ctx, topicId)
 	})
 	if err != nil {
+		slog.Error("create mindcache failed", "topic", topicId, "error", err)
 		return nil, err
 	}
 	return &result, nil
@@ -148,9 +150,14 @@ func (s *MindcacheService) Update(ctx context.Context, mindcacheId, topicId stri
 		s.updateDedup.Invalidate(cacheKey)
 	}
 
-	return s.updateDedup.Do(ctx, cacheKey, func(ctx context.Context) (bool, error) {
+	ok, err := s.updateDedup.Do(ctx, cacheKey, func(ctx context.Context) (bool, error) {
 		return s.doUpdate(ctx, mindcacheId, topicId)
 	})
+	if err != nil {
+		slog.Error("update mindcache failed", "mindcache", mindcacheId, "topic", topicId, "error", err)
+		return false, err
+	}
+	return ok, nil
 }
 
 type integrateResponse struct {
@@ -202,7 +209,7 @@ func (s *MindcacheService) doUpdate(ctx context.Context, mindcacheId, topicId st
 
 	integrated, err := parseLLMJSON[integrateResponse](raw)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("%w: integrate: %w", ErrLLMResponse, err)
 	}
 
 	if err := s.storage.Write(ctx, model.MindcacheMainPath(mindcacheId), []byte(integrated.Content)); err != nil {

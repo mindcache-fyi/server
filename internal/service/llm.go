@@ -157,7 +157,10 @@ func (c *LLMClient) Generate(ctx context.Context, userMessage string, systemProm
 
 	result, err := goai.GenerateText(ctx, c.model, opts...)
 	if err != nil {
-		return "", err
+		if ctx.Err() != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("%w: %w", ErrLLMUpstream, err)
 	}
 	return result.Text, nil
 }

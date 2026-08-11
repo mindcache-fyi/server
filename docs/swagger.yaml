@@ -214,6 +214,14 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/model.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/model.ErrorResponse'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/model.ErrorResponse'
       summary: Analyse a chat and return matching topics and mindcaches
       tags:
       - analyse

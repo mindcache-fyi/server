@@ -72,10 +72,19 @@ func NewAnalyseService(kv *cache.KVCache, repo *store.MindcacheRepo, llm LLM) *A
 // Analyse extracts topics for a chat, deduplicating concurrent and repeated calls.
 func (s *AnalyseService) Analyse(ctx context.Context, chat model.Chat) (*AnalyseResult, error) {
 	key := contentHash(chat.Content)
-	return s.dedup.Do(ctx, key, func(ctx context.Context) (*AnalyseResult, error) {
+	result, err := s.dedup.Do(ctx, key, func(ctx context.Context) (*AnalyseResult, error) {
 		slog.Info("analysing (cache miss)", "content_hash", key[:8], "chat", chat.ChatID)
 		return s.doAnalyse(ctx, chat)
 	})
+	if err != nil {
+		slog.Error("analyse failed",
+			"chat", chat.ChatID,
+			"content_hash", key[:8],
+			"error", err,
+		)
+		return nil, err
+	}
+	return result, nil
 }
 
 // ClearCache drops cached analysis results and their KV entries for a chat.
@@ -168,10 +177,10 @@ func (s *AnalyseService) extractTopics(ctx context.Context, chat model.Chat) ([]
 
 	parsed, err := parseLLMJSON[topicsResponse](raw)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: topics: %w", ErrLLMResponse, err)
 	}
 	if parsed.Topics == nil {
-		return nil, fmt.Errorf("llm returned unexpected format")
+		return nil, fmt.Errorf("%w: topics: unexpected format", ErrLLMResponse)
 	}
 
 	topics := make([]model.Topic, 0, len(parsed.Topics))
@@ -216,7 +225,7 @@ func (s *AnalyseService) matchMindcaches(ctx context.Context, topics []model.Top
 
 	parsed, err := parseLLMJSON[matchesResponse](raw)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: matches: %w", ErrLLMResponse, err)
 	}
 	if parsed.Matches == nil {
 		return map[string][]string{}, nil

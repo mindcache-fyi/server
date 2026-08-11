@@ -30,7 +30,7 @@ func NewMindcacheHandler(svc *service.MindcacheService) *MindcacheHandler {
 func (h *MindcacheHandler) List(w http.ResponseWriter, r *http.Request) {
 	mindcaches, err := h.svc.List(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, model.ListResponse{Mindcaches: mindcaches})
@@ -53,7 +53,7 @@ func (h *MindcacheHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	mc, mainContent, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	if mc == nil {
@@ -156,7 +156,7 @@ func (h *MindcacheHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	deleted, err := h.svc.Delete(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 	if !deleted {

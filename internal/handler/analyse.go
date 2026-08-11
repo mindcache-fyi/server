@@ -28,6 +28,8 @@ func NewAnalyseHandler(svc *service.AnalyseService) *AnalyseHandler {
 // @Param body body model.AnalyseRequest true "Chat payload"
 // @Success 200 {object} model.AnalyseResponse
 // @Failure 400 {object} model.ErrorResponse
+// @Failure 502 {object} model.ErrorResponse
+// @Failure 504 {object} model.ErrorResponse
 // @Failure 500 {object} model.ErrorResponse
 // @Router /v1/api/analyse [post]
 func (h *AnalyseHandler) Analyse(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +49,7 @@ func (h *AnalyseHandler) Analyse(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.Analyse(ctx, req.Chat)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 
@@ -75,7 +77,7 @@ func (h *AnalyseHandler) ClearAnalyse(w http.ResponseWriter, r *http.Request) {
 
 	cleared, err := h.svc.ClearCache(r.Context(), req.Chat)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeServiceError(w, r, err)
 		return
 	}
 

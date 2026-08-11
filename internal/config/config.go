@@ -42,10 +42,10 @@ func Load() (*Config, error) {
 
 	if c.IsDev() {
 		if c.LLMBaseURL == "" {
-			c.LLMBaseURL = "http://192.168.0.50:8080/v1"
+			c.LLMBaseURL = "http://127.0.0.1:1234/v1"
 		}
 		if c.LLMModel == "" {
-			c.LLMModel = "Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf"
+			c.LLMModel = "google/gemma-4-e2b"
 		}
 	}
 
