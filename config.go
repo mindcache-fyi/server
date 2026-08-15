@@ -1,13 +1,14 @@
-package config
+package server
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"strconv"
 	"strings"
 )
 
-// Config holds all configuration for the server.
+// Config holds all configuration for a server instance.
 type Config struct {
 	Env               string
 	Port              string
@@ -17,10 +18,17 @@ type Config struct {
 	LLMAPIKey         string
 	LLMModel          string
 	LLMMaxConcurrency int
+
+	// PublicFS optionally overrides the on-disk public/ directory for
+	// static content served at the site root (e.g. an embedded SPA).
+	// When nil, the server falls back to the public/ directory in the
+	// current working directory when it exists.
+	PublicFS fs.FS
 }
 
-// Load reads configuration from environment variables with sensible defaults.
-func Load() (*Config, error) {
+// LoadConfigFromEnv reads configuration from environment variables with
+// sensible defaults.
+func LoadConfigFromEnv() (*Config, error) {
 	env := getEnv("APP_ENV", "production")
 	defaultDBPath := "mindcache.db"
 	defaultStorageURL := "file://."
@@ -84,12 +92,12 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// IsDev returns true if running in development mode.
+// IsDev returns true when running in development mode.
 func (c *Config) IsDev() bool {
 	return c.Env == "development"
 }
 
-// IsProd returns true if running in production mode.
+// IsProd returns true when running in production mode.
 func (c *Config) IsProd() bool {
 	return c.Env == "production"
 }
