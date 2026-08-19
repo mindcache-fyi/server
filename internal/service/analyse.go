@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -20,29 +21,30 @@ import (
 
 const extractTopicsSystemPrompt = `You are a topic extraction specialist. Analyse the given conversation and extract the main topics discussed.
 
-For each topic, provide a concise brief summary (max 120 characters) with a leading title followed by ":"
-
 Rules:
-- Identify at most 10 distinct topics from the conversation. The topics should be as most less as possible.
-- Each brief should be self-contained and descriptive, summarized in the main language of the conversation.
-- No same keywords should be shared between briefs
-- Return ONLY valid JSON with no markdown formatting
+- Extract at most 10 topics; merge duplicates so the list is as short as the content allows.
+- No two topics may cover the same subject.
+- For each topic give a short title (up to 40 characters) and a self-contained, descriptive brief (up to 80 characters).
+- Write titles and briefs in the main language of the conversation.
+- Return ONLY a valid JSON object — no markdown fences, no text outside the JSON.
 
-Respond with a JSON object in this exact format:
-{ "topics": [{ "brief": "..." }] }`
+Respond with a JSON object in exactly this format:
+{ "topics": [ { "title": "...", "brief": "..." } ] }`
 
-const matchMindcachesPrompt = `You are a relevance matching specialist. For each topic below, identify the top 0-3 most relevant mindcaches.
+const matchMindcachesSystemPrompt = `You are a relevance matching specialist. You receive a numbered list of new topics and a numbered list of existing mindcaches (knowledge notes). For each topic, pick the 0-3 most relevant mindcaches.
 
-TOPICS:
+Relevance means the same subject: a reader would expect to find both in the same note. Judge by meaning, not by shared wording, and match across languages when the subjects are the same.
+
+Return ONLY a valid JSON object — no markdown fences, no text outside the JSON. Keys are topic numbers as strings; values are arrays of mindcache numbers. Use only numbers that appear in the lists you were given.`
+
+const matchMindcachesUserPrompt = `TOPICS:
 %s
 
 MINDCACHES:
 %s
 
-Return ONLY valid JSON — no markdown, no extra text:
-{ "matches": { "<topicId>": ["<mcId>", ...], ... } }
-
-For each topic return 0-3 IDs (the number of matching mindcaches determines how many). Only use IDs that exist in the MINDCACHES list above.`
+Respond with a JSON object in exactly this format:
+{ "matches": { "<topic number>": [<mindcache number>, ...], ... } }`
 
 // AnalyseResult holds the output of analysing a chat.
 type AnalyseResult struct {
@@ -53,19 +55,22 @@ type AnalyseResult struct {
 
 // AnalyseService extracts topics from chats and matches them to mindcaches.
 type AnalyseService struct {
-	kv    *cache.KVCache
-	repo  *store.MindcacheRepo
-	llm   LLM
-	dedup *dedup.Deduplicator[*AnalyseResult]
+	kv            *cache.KVCache
+	repo          *store.MindcacheRepo
+	llm           LLM
+	dedup         *dedup.Deduplicator[*AnalyseResult]
+	maxInputChars int
 }
 
-// NewAnalyseService creates an AnalyseService.
-func NewAnalyseService(kv *cache.KVCache, repo *store.MindcacheRepo, llm LLM) *AnalyseService {
+// NewAnalyseService creates an AnalyseService. maxInputChars caps the
+// conversation text sent to the LLM per call; values <= 0 disable the cap.
+func NewAnalyseService(kv *cache.KVCache, repo *store.MindcacheRepo, llm LLM, maxInputChars int) *AnalyseService {
 	return &AnalyseService{
-		kv:    kv,
-		repo:  repo,
-		llm:   llm,
-		dedup: dedup.NewDeduplicator[*AnalyseResult](30 * time.Minute),
+		kv:            kv,
+		repo:          repo,
+		llm:           llm,
+		dedup:         dedup.NewDeduplicator[*AnalyseResult](30 * time.Minute),
+		maxInputChars: maxInputChars,
 	}
 }
 
@@ -159,6 +164,7 @@ func (s *AnalyseService) doAnalyse(ctx context.Context, chat model.Chat) (*Analy
 
 type topicsResponse struct {
 	Topics []struct {
+		Title string `json:"title"`
 		Brief string `json:"brief"`
 	} `json:"topics"`
 }
@@ -168,15 +174,11 @@ func (s *AnalyseService) extractTopics(ctx context.Context, chat model.Chat) ([]
 	if title == "" {
 		title = "(untitled)"
 	}
-	userMessage := fmt.Sprintf("Title: %s\n\nConversation:\n%s", title, chat.Content)
+	content := truncateConversation(chat.Content, s.maxInputChars)
+	userMessage := fmt.Sprintf("Title: %s\n\nConversation:\n%s", title, content)
 
-	raw, err := s.llm.Generate(ctx, userMessage, extractTopicsSystemPrompt)
-	if err != nil {
-		return nil, err
-	}
-
-	parsed, err := parseLLMJSON[topicsResponse](raw)
-	if err != nil {
+	var parsed topicsResponse
+	if err := generateJSONWithRetry(ctx, s.llm, userMessage, extractTopicsSystemPrompt, &parsed); err != nil {
 		return nil, fmt.Errorf("%w: topics: %w", ErrLLMResponse, err)
 	}
 	if parsed.Topics == nil {
@@ -185,13 +187,10 @@ func (s *AnalyseService) extractTopics(ctx context.Context, chat model.Chat) ([]
 
 	topics := make([]model.Topic, 0, len(parsed.Topics))
 	for i, t := range parsed.Topics {
-		brief := t.Brief
-		if r := []rune(brief); len(r) > 120 {
-			brief = string(r[:120])
-		}
 		topics = append(topics, model.Topic{
 			TopicID:    generateTopicID(i),
-			Brief:      brief,
+			Title:      truncateRunes(t.Title, 40),
+			Brief:      composeBrief(t.Title, t.Brief),
 			SourceChat: chat.ChatID,
 		})
 	}
@@ -199,7 +198,7 @@ func (s *AnalyseService) extractTopics(ctx context.Context, chat model.Chat) ([]
 }
 
 type matchesResponse struct {
-	Matches map[string][]string `json:"matches"`
+	Matches map[string][]int `json:"matches"`
 }
 
 func (s *AnalyseService) matchMindcaches(ctx context.Context, topics []model.Topic, mindcaches []model.Mindcache) (map[string][]string, error) {
@@ -208,48 +207,130 @@ func (s *AnalyseService) matchMindcaches(ctx context.Context, topics []model.Top
 	}
 
 	topicLines := make([]string, 0, len(topics))
-	for _, t := range topics {
-		topicLines = append(topicLines, t.TopicID+": "+t.Brief)
+	for i, t := range topics {
+		topicLines = append(topicLines, fmt.Sprintf("%d. %s", i+1, t.Brief))
 	}
 	mcLines := make([]string, 0, len(mindcaches))
-	for _, mc := range mindcaches {
-		mcLines = append(mcLines, mc.ID+": "+mc.Brief)
+	for i, mc := range mindcaches {
+		mcLines = append(mcLines, fmt.Sprintf("%d. %s", i+1, mc.Brief))
 	}
 
-	prompt := fmt.Sprintf(matchMindcachesPrompt, strings.Join(topicLines, "\n"), strings.Join(mcLines, "\n"))
+	userMessage := fmt.Sprintf(matchMindcachesUserPrompt, strings.Join(topicLines, "\n"), strings.Join(mcLines, "\n"))
 
-	raw, err := s.llm.Generate(ctx, prompt, "")
-	if err != nil {
-		return nil, err
-	}
-
-	parsed, err := parseLLMJSON[matchesResponse](raw)
-	if err != nil {
+	var parsed matchesResponse
+	if err := generateJSONWithRetry(ctx, s.llm, userMessage, matchMindcachesSystemPrompt, &parsed); err != nil {
 		return nil, fmt.Errorf("%w: matches: %w", ErrLLMResponse, err)
 	}
-	if parsed.Matches == nil {
-		return map[string][]string{}, nil
+
+	matches := make(map[string][]string, len(parsed.Matches))
+	for topicIdxStr, mcIdxs := range parsed.Matches {
+		topicIdx, err := strconv.Atoi(topicIdxStr)
+		if err != nil || topicIdx < 1 || topicIdx > len(topics) {
+			continue
+		}
+		topicID := topics[topicIdx-1].TopicID
+		seen := make(map[string]bool, len(mcIdxs))
+		ids := make([]string, 0, len(mcIdxs))
+		for _, mcIdx := range mcIdxs {
+			if mcIdx < 1 || mcIdx > len(mindcaches) {
+				continue
+			}
+			mcID := mindcaches[mcIdx-1].ID
+			if seen[mcID] {
+				continue
+			}
+			seen[mcID] = true
+			ids = append(ids, mcID)
+			if len(ids) == 3 {
+				break
+			}
+		}
+		if len(ids) > 0 {
+			matches[topicID] = ids
+		}
 	}
-	return parsed.Matches, nil
+	return matches, nil
 }
 
-func parseLLMJSON[T any](raw string) (T, error) {
-	var result T
+// parseLLMJSONInto unmarshals an LLM reply into out, tolerating markdown
+// fences and surrounding chatter.
+func parseLLMJSONInto(raw string, out any) error {
 	cleaned := stripMarkdownFences(raw)
 
-	if err := json.Unmarshal([]byte(cleaned), &result); err == nil {
-		return result, nil
+	if err := json.Unmarshal([]byte(cleaned), out); err == nil {
+		return nil
 	}
 
 	start := strings.Index(cleaned, "{")
 	end := strings.LastIndex(cleaned, "}")
 	if start >= 0 && end > start {
-		if err := json.Unmarshal([]byte(cleaned[start:end+1]), &result); err == nil {
-			return result, nil
+		if err := json.Unmarshal([]byte(cleaned[start:end+1]), out); err == nil {
+			return nil
 		}
 	}
 
-	return result, fmt.Errorf("failed to parse LLM response as JSON")
+	return errors.New("failed to parse LLM response as JSON")
+}
+
+// generateJSONWithRetry asks the LLM for a JSON object and retries once with
+// parse-error feedback when the first reply is not valid JSON.
+func generateJSONWithRetry(ctx context.Context, llm LLM, userMessage, systemPrompt string, out any) error {
+	raw, err := llm.Generate(ctx, userMessage, systemPrompt)
+	if err != nil {
+		return err
+	}
+	if parseErr := parseLLMJSONInto(raw, out); parseErr == nil {
+		return nil
+	} else {
+		retryMessage := userMessage +
+			"\n\nYour previous reply was not valid JSON (" + parseErr.Error() +
+			"). Reply again with ONLY the JSON object — no markdown fences, no commentary."
+		raw, err = llm.Generate(ctx, retryMessage, systemPrompt)
+		if err != nil {
+			return err
+		}
+		return parseLLMJSONInto(raw, out)
+	}
+}
+
+const truncationMarker = "\n\n[... middle of conversation truncated ...]\n\n"
+
+// truncateConversation limits content to roughly maxRunes runes, keeping the
+// beginning and the end. maxRunes <= 0 disables truncation.
+func truncateConversation(content string, maxRunes int) string {
+	r := []rune(content)
+	if maxRunes <= 0 || len(r) <= maxRunes {
+		return content
+	}
+	headLen := maxRunes * 2 / 3
+	tailLen := maxRunes - headLen
+	return string(r[:headLen]) + truncationMarker + string(r[len(r)-tailLen:])
+}
+
+// truncateRunes shortens s to at most max runes. max <= 0 disables truncation.
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if max <= 0 || len(r) <= max {
+		return s
+	}
+	return string(r[:max])
+}
+
+// composeBrief builds the display brief from a topic title and summary,
+// keeping the "Title: summary" convention used across the product.
+func composeBrief(title, summary string) string {
+	title = strings.TrimSpace(truncateRunes(title, 40))
+	summary = strings.TrimSpace(truncateRunes(summary, 80))
+	switch {
+	case title == "" && summary == "":
+		return ""
+	case title == "":
+		return summary
+	case summary == "":
+		return title
+	default:
+		return truncateRunes(title+": "+summary, 120)
+	}
 }
 
 func stripMarkdownFences(s string) string {

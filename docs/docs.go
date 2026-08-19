@@ -509,6 +509,10 @@ const docTemplate = `{
                     "description": "Source chat ID this topic was extracted from",
                     "type": "string"
                 },
+                "title": {
+                    "description": "Short topic title",
+                    "type": "string"
+                },
                 "topicId": {
                     "description": "Unique topic identifier",
                     "type": "string"

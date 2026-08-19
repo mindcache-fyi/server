@@ -18,6 +18,9 @@ type Config struct {
 	LLMAPIKey         string
 	LLMModel          string
 	LLMMaxConcurrency int
+	// LLMMaxInputChars caps conversation text sent to the LLM per call.
+	// Values <= 0 disable the cap.
+	LLMMaxInputChars int
 
 	// PublicFS optionally overrides the on-disk public/ directory for
 	// static content served at the site root (e.g. an embedded SPA).
@@ -46,6 +49,7 @@ func LoadConfigFromEnv() (*Config, error) {
 		LLMAPIKey:         getEnv("LLM_API_KEY", "local"),
 		LLMModel:          getEnv("LLM_MODEL", ""),
 		LLMMaxConcurrency: getEnvInt("LLM_MAX_CONCURRENCY", 1),
+		LLMMaxInputChars:  getEnvInt("LLM_MAX_INPUT_CHARS", 100000),
 	}
 
 	if c.IsDev() {

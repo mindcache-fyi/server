@@ -40,23 +40,26 @@ Return ONLY valid JSON with no additional commentary or markdown fences.`
 
 // MindcacheService manages mindcache CRUD and LLM-driven content integration.
 type MindcacheService struct {
-	repo        *store.MindcacheRepo
-	storage     *Storage
-	llm         LLM
-	kv          *cache.KVCache
-	createDedup *dedup.Deduplicator[model.Mindcache]
-	updateDedup *dedup.Deduplicator[bool]
+	repo          *store.MindcacheRepo
+	storage       *Storage
+	llm           LLM
+	kv            *cache.KVCache
+	createDedup   *dedup.Deduplicator[model.Mindcache]
+	updateDedup   *dedup.Deduplicator[bool]
+	maxInputChars int
 }
 
-// NewMindcacheService creates a MindcacheService.
-func NewMindcacheService(repo *store.MindcacheRepo, storage *Storage, llm LLM, kv *cache.KVCache) *MindcacheService {
+// NewMindcacheService creates a MindcacheService. maxInputChars caps the
+// conversation text sent to the LLM per call; values <= 0 disable the cap.
+func NewMindcacheService(repo *store.MindcacheRepo, storage *Storage, llm LLM, kv *cache.KVCache, maxInputChars int) *MindcacheService {
 	return &MindcacheService{
-		repo:        repo,
-		storage:     storage,
-		llm:         llm,
-		kv:          kv,
-		createDedup: dedup.NewDeduplicator[model.Mindcache](30 * time.Minute),
-		updateDedup: dedup.NewDeduplicator[bool](30 * time.Minute),
+		repo:          repo,
+		storage:       storage,
+		llm:           llm,
+		kv:            kv,
+		createDedup:   dedup.NewDeduplicator[model.Mindcache](30 * time.Minute),
+		updateDedup:   dedup.NewDeduplicator[bool](30 * time.Minute),
+		maxInputChars: maxInputChars,
 	}
 }
 
@@ -199,16 +202,11 @@ func (s *MindcacheService) doUpdate(ctx context.Context, mindcacheId, topicId st
 
 	userMessage := fmt.Sprintf(
 		"Topic: %s\n\nNew conversation (extract relevant info and integrate into the existing document):\n%s\n\nExisting mindcache document:\n%s",
-		topic.Brief, chat.Content, existing,
+		topic.Brief, truncateConversation(chat.Content, s.maxInputChars), existing,
 	)
 
-	raw, err := s.llm.Generate(ctx, userMessage, integrateInstructions)
-	if err != nil {
-		return false, err
-	}
-
-	integrated, err := parseLLMJSON[integrateResponse](raw)
-	if err != nil {
+	var integrated integrateResponse
+	if err := generateJSONWithRetry(ctx, s.llm, userMessage, integrateInstructions, &integrated); err != nil {
 		return false, fmt.Errorf("%w: integrate: %w", ErrLLMResponse, err)
 	}
 
@@ -243,7 +241,7 @@ func (s *MindcacheService) Delete(ctx context.Context, id string) (bool, error) 
 }
 
 func (s *MindcacheService) extractTopicContent(ctx context.Context, topic string, chat model.Chat) (string, error) {
-	userMessage := fmt.Sprintf("Topic: %s\n\nConversation:\n%s", topic, chat.Content)
+	userMessage := fmt.Sprintf("Topic: %s\n\nConversation:\n%s", topic, truncateConversation(chat.Content, s.maxInputChars))
 	return s.llm.Generate(ctx, userMessage, extractInstructions)
 }
 

@@ -69,8 +69,8 @@ func New(cfg *Config) (*App, error) {
 	}
 
 	repo := store.NewMindcacheRepo(db)
-	analyseSvc := service.NewAnalyseService(kv, repo, llm)
-	mindcacheSvc := service.NewMindcacheService(repo, storage, llm, kv)
+	analyseSvc := service.NewAnalyseService(kv, repo, llm, cfg.LLMMaxInputChars)
+	mindcacheSvc := service.NewMindcacheService(repo, storage, llm, kv, cfg.LLMMaxInputChars)
 
 	healthH := handler.NewHealthHandler(db, storage, llm)
 	analyseH := handler.NewAnalyseHandler(analyseSvc)

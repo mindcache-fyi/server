@@ -32,6 +32,8 @@ type Chat struct {
 type Topic struct {
 	// Unique topic identifier
 	TopicID string `json:"topicId"`
+	// Short topic title
+	Title string `json:"title"`
 	// Brief summary of the topic
 	Brief string `json:"brief"`
 	// Source chat ID this topic was extracted from
