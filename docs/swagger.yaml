@@ -35,6 +35,13 @@ definitions:
       content:
         description: Full chat content as plain text
         type: string
+      messages:
+        description: |-
+          Structured messages; optional, keeps backward compatibility with flat
+          content when absent.
+        items:
+          $ref: '#/definitions/model.Message'
+        type: array
       provider:
         description: 'Provider enum: gemini, claude, deepseek, yuanbao, chatgpt'
         enum:
@@ -87,6 +94,11 @@ definitions:
         type: string
       mindcache:
         $ref: '#/definitions/model.Mindcache'
+      sources:
+        description: Provenance records, one per capture that fed this mindcache
+        items:
+          $ref: '#/definitions/model.SourceRecord'
+        type: array
     type: object
   model.ListResponse:
     properties:
@@ -95,6 +107,15 @@ definitions:
         items:
           $ref: '#/definitions/model.Mindcache'
         type: array
+    type: object
+  model.Message:
+    properties:
+      content:
+        description: Message text
+        type: string
+      role:
+        description: 'Message role: user, assistant, or other'
+        type: string
     type: object
   model.Mindcache:
     properties:
@@ -113,14 +134,51 @@ definitions:
         description: Last update timestamp
         type: string
     type: object
+  model.SourceRecord:
+    properties:
+      capturedAt:
+        description: When the record was added
+        type: string
+      chatId:
+        description: Source chat identifier
+        type: string
+      excerpts:
+        description: Excerpts of the messages backing the topic
+        items:
+          type: string
+        type: array
+      sourceUrl:
+        description: Source conversation URL
+        type: string
+      topicBrief:
+        description: Topic brief that was cached
+        type: string
+      topicTitle:
+        description: Topic title that was cached
+        type: string
+    type: object
   model.Topic:
     properties:
       brief:
         description: Brief summary of the topic
         type: string
+      messageRefs:
+        description: |-
+          MessageRefs are 1-based indices into Chat.Messages supporting this
+          topic. Empty when the chat was captured without structured messages.
+        items:
+          type: integer
+        type: array
       sourceChat:
         description: Source chat ID this topic was extracted from
         type: string
+      sourceExcerpts:
+        description: |-
+          SourceExcerpts are the referenced messages in "[role] content" form,
+          aligned with MessageRefs.
+        items:
+          type: string
+        type: array
       title:
         description: Short topic title
         type: string

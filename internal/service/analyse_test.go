@@ -286,3 +286,137 @@ func TestGenerateJSONWithRetry_UpstreamErrors(t *testing.T) {
 		t.Errorf("calls = %d, want 2", second.calls)
 	}
 }
+
+func testMessages() []model.Message {
+	return []model.Message{
+		{Role: "user", Content: "How does Docker networking work?"},
+		{Role: "assistant", Content: "Bridge mode isolates containers."},
+		{Role: "user", Content: "And host mode?"},
+		{Role: "assistant", Content: "Host mode shares the host network stack."},
+	}
+}
+
+func TestFormatConversation_MessagesNumbered(t *testing.T) {
+	chat := model.Chat{Content: "flat", Messages: testMessages()}
+	text, indexMap := formatConversation(chat, 0)
+	if !strings.Contains(text, "[1] user: How does Docker networking work?") {
+		t.Errorf("missing numbered first message: %q", text)
+	}
+	if !strings.Contains(text, "[4] assistant: Host mode shares the host network stack.") {
+		t.Errorf("missing numbered last message: %q", text)
+	}
+	if len(indexMap) != 4 {
+		t.Fatalf("len(indexMap) = %d, want 4", len(indexMap))
+	}
+	for i, v := range indexMap {
+		if v != i+1 {
+			t.Errorf("indexMap[%d] = %d, want identity %d", i, v, i+1)
+		}
+	}
+}
+
+func TestFormatConversation_FlatFallback(t *testing.T) {
+	chat := model.Chat{Content: "flat content"}
+	text, indexMap := formatConversation(chat, 0)
+	if text != "flat content" {
+		t.Errorf("text = %q, want flat content", text)
+	}
+	if indexMap != nil {
+		t.Errorf("indexMap = %v, want nil for flat content", indexMap)
+	}
+}
+
+func TestTruncateMessages(t *testing.T) {
+	msgs := make([]model.Message, 6)
+	for i := range msgs {
+		msgs[i] = model.Message{Role: "assistant", Content: strings.Repeat("x", 30)}
+	}
+
+	// Disabled when maxRunes <= 0.
+	if out, idx := truncateMessages(msgs, 0); len(out) != 6 || len(idx) != 6 {
+		t.Errorf("maxRunes=0 must not truncate, got %d messages", len(out))
+	}
+
+	// Each message costs ~47 runes (30 content + 9 role + 8 overhead); total
+	// ~282. Budget 150 -> head keeps 2 messages, tail keeps 1, marker in the
+	// middle.
+	out, idx := truncateMessages(msgs, 150)
+	if len(out) != 4 || len(idx) != 4 {
+		t.Fatalf("len(out) = %d, want 4 (head 2 + marker + tail 1)", len(out))
+	}
+	if !strings.Contains(out[2].Content, "truncated") {
+		t.Errorf("marker message missing or wrong: %q", out[2].Content)
+	}
+	if idx[0] != 1 || idx[1] != 2 || idx[2] != 0 || idx[3] != 6 {
+		t.Errorf("indexMap = %v, want [1 2 0 6]", idx)
+	}
+
+	// Budgets that fit everything return the input unchanged.
+	out, idx = truncateMessages(msgs, 10000)
+	if len(out) != 6 {
+		t.Errorf("large budget must keep all messages, got %d", len(out))
+	}
+	for i, v := range idx {
+		if v != i+1 {
+			t.Errorf("indexMap[%d] = %d, want identity", i, v)
+		}
+	}
+}
+
+func TestExtractTopics_MessageRefsAndExcerpts(t *testing.T) {
+	llm := &scriptedLLM{replies: []string{
+		`{"topics":[{"title":"Docker networking","brief":"bridge vs host modes","messages":[1,4,99,4]}]}`,
+	}}
+	svc := newTestAnalyseService(llm, 0)
+	chat := testChat("ignored flat content")
+	chat.Messages = testMessages()
+
+	topics, err := svc.extractTopics(context.Background(), chat)
+	if err != nil {
+		t.Fatalf("extractTopics: %v", err)
+	}
+	if len(topics) != 1 {
+		t.Fatalf("len(topics) = %d, want 1", len(topics))
+	}
+	got := topics[0]
+	if len(got.MessageRefs) != 2 || got.MessageRefs[0] != 1 || got.MessageRefs[1] != 4 {
+		t.Errorf("MessageRefs = %v, want [1 4] (out-of-range and duplicates dropped)", got.MessageRefs)
+	}
+	wantExcerpts := []string{
+		"user: How does Docker networking work?",
+		"assistant: Host mode shares the host network stack.",
+	}
+	if len(got.SourceExcerpts) != 2 ||
+		got.SourceExcerpts[0] != wantExcerpts[0] ||
+		got.SourceExcerpts[1] != wantExcerpts[1] {
+		t.Errorf("SourceExcerpts = %v, want %v", got.SourceExcerpts, wantExcerpts)
+	}
+	if !strings.Contains(llm.lastUser, "[1] user:") {
+		t.Errorf("prompt does not render numbered messages: %q", llm.lastUser)
+	}
+	if !strings.Contains(llm.lastSystem, `"messages": [i, ...]`) {
+		t.Errorf("system prompt missing messages addendum: %q", llm.lastSystem)
+	}
+}
+
+func TestExtractTopics_NoMessagesLegacy(t *testing.T) {
+	llm := &scriptedLLM{replies: []string{
+		`{"topics":[{"title":"SQLite WAL","brief":"write-ahead logging trade-offs"}]}`,
+	}}
+	svc := newTestAnalyseService(llm, 0)
+
+	topics, err := svc.extractTopics(context.Background(), testChat("hello"))
+	if err != nil {
+		t.Fatalf("extractTopics: %v", err)
+	}
+	if len(topics) != 1 {
+		t.Fatalf("len(topics) = %d, want 1", len(topics))
+	}
+	if topics[0].MessageRefs != nil || topics[0].SourceExcerpts != nil {
+		t.Errorf("legacy chat must carry no provenance, got refs=%v excerpts=%v",
+			topics[0].MessageRefs, topics[0].SourceExcerpts)
+	}
+	if strings.Contains(llm.lastSystem, `"messages": [i, ...]`) {
+		t.Error("system prompt must not include the messages addendum for flat chats")
+	}
+}

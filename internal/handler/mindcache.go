@@ -64,6 +64,7 @@ func (h *MindcacheHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.GetResponse{
 		Mindcache:   *mc,
 		MainContent: mainContent,
+		Sources:     h.svc.Sources(r.Context(), id),
 	})
 }
 

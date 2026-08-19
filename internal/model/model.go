@@ -14,6 +14,14 @@ var (
 	ErrLLMNotConfigured  = errors.New("LLM not configured")
 )
 
+// Message is one chat message with its role.
+type Message struct {
+	// Message role: user, assistant, or other
+	Role string `json:"role"`
+	// Message text
+	Content string `json:"content"`
+}
+
 // Chat represents a conversation from an AI provider.
 type Chat struct {
 	// Unique chat identifier
@@ -26,6 +34,9 @@ type Chat struct {
 	Title string `json:"title"`
 	// Full chat content as plain text
 	Content string `json:"content"`
+	// Structured messages; optional, keeps backward compatibility with flat
+	// content when absent.
+	Messages []Message `json:"messages,omitempty"`
 }
 
 // Topic represents an extracted topic from a chat.
@@ -38,6 +49,30 @@ type Topic struct {
 	Brief string `json:"brief"`
 	// Source chat ID this topic was extracted from
 	SourceChat string `json:"sourceChat"`
+	// MessageRefs are 1-based indices into Chat.Messages supporting this
+	// topic. Empty when the chat was captured without structured messages.
+	MessageRefs []int `json:"messageRefs,omitempty"`
+	// SourceExcerpts are the referenced messages in "[role] content" form,
+	// aligned with MessageRefs.
+	SourceExcerpts []string `json:"sourceExcerpts,omitempty"`
+}
+
+// SourceRecord is one provenance entry persisted in a mindcache's
+// sources.json, recording which capture (and which parts of it) fed the
+// mindcache.
+type SourceRecord struct {
+	// Source chat identifier
+	ChatID string `json:"chatId"`
+	// Source conversation URL
+	SourceURL string `json:"sourceUrl"`
+	// Topic title that was cached
+	TopicTitle string `json:"topicTitle"`
+	// Topic brief that was cached
+	TopicBrief string `json:"topicBrief"`
+	// Excerpts of the messages backing the topic
+	Excerpts []string `json:"excerpts"`
+	// When the record was added
+	CapturedAt time.Time `json:"capturedAt"`
 }
 
 // Mindcache represents a knowledge cache entry.
@@ -117,6 +152,8 @@ type GetResponse struct {
 	Mindcache Mindcache `json:"mindcache"`
 	// Main markdown content
 	MainContent string `json:"mainContent"`
+	// Provenance records, one per capture that fed this mindcache
+	Sources []SourceRecord `json:"sources,omitempty"`
 }
 
 // ErrorResponse is the standard error response body.
@@ -138,6 +175,12 @@ func MindcachePrefix(id string) string {
 // MindcacheAssetPath returns the storage path for a mindcache asset.
 func MindcacheAssetPath(id, filename string) string {
 	return "mindcache/" + id + "/assets/" + filename
+}
+
+// MindcacheSourcesPath returns the storage path for a mindcache's
+// provenance records.
+func MindcacheSourcesPath(id string) string {
+	return "mindcache/" + id + "/sources.json"
 }
 
 var validProviders = map[string]bool{
