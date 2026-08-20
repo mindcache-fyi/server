@@ -1,0 +1,20 @@
+{
+  "name": "mixed-en-zh",
+  "chat": {
+    "title": "Redis caching 讨论",
+    "messages": [
+      { "role": "user", "content": "Our product pages read the same config data over and over. 我想加一层 Redis 缓存，TTL 怎么定比较合适？" },
+      { "role": "assistant", "content": "先按数据的变更频率定 TTL：几乎不变的全局配置可以给几小时甚至更长，会变的业务数据给分钟级。再叠加一层保护，缓存 miss 时用 single-flight 防击穿。" },
+      { "role": "user", "content": "Got it. 那缓存和数据库的一致性呢？我们是先更新 DB 再删缓存，这样对吗？" },
+      { "role": "assistant", "content": "这是最常用的 cache-aside：写 DB 成功后删 key，读时 miss 再回填。注意删除失败要有重试或消息补偿，不然会长期读到旧值。If writes are very frequent, consider a short TTL as the safety net instead of chasing perfect invalidation." },
+      { "role": "user", "content": "内存不够时 Redis 会淘汰哪些 key？我们没配 eviction policy。" },
+      { "role": "assistant", "content": "默认是 noeviction：内存满时写入直接报错。一般会设 allkeys-lru 或 volatile-lru，前者淘汰最久未用的任意 key，后者只淘汰带 TTL 的。配置数据这种读多写少的场景 allkeys-lru 比较省心。" }
+    ]
+  },
+  "collection": [
+    "Redis caching strategies: TTL sizing, cache-aside invalidation, eviction policies"
+  ],
+  "expected": [
+    { "topic_contains": "redis", "briefs": ["Redis caching strategies: TTL sizing, cache-aside invalidation, eviction policies"] }
+  ]
+}

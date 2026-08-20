@@ -1,0 +1,23 @@
+{
+  "name": "en-small-talk",
+  "chat": {
+    "title": "Morning chat about postgres",
+    "messages": [
+      { "role": "user", "content": "Good morning! How's it going today?" },
+      { "role": "assistant", "content": "Good morning! I'm doing well, thanks for asking. How can I help you today?" },
+      { "role": "user", "content": "Nice weather here, finally sunny after a week of rain. Anyway, quick work question." },
+      { "role": "assistant", "content": "Enjoy the sun! Sure, what's the question?" },
+      { "role": "user", "content": "Our Postgres table keeps growing and autovacuum seems to lag behind on the big events table. What actually happens if vacuum falls behind?" },
+      { "role": "assistant", "content": "Dead tuples accumulate, so indexes and sequential scans read more pages than needed, and table bloat grows. In the worst case, if dead tuples fill the wraparound horizon you risk transaction ID wraparound. Tune autovacuum_vacuum_scale_factor down for big tables and raise autovacuum_vacuum_cost_limit so it works harder." },
+      { "role": "user", "content": "Thanks! Have a good one." },
+      { "role": "assistant", "content": "You too, happy tuning!" }
+    ]
+  },
+  "collection": [
+    "PostgreSQL maintenance: vacuum tuning, table bloat, autovacuum scale factor",
+    "Trip planning for Kyoto: temples, seasonal timing, rail passes"
+  ],
+  "expected": [
+    { "topic_contains": "vacuum", "briefs": ["PostgreSQL maintenance: vacuum tuning, table bloat, autovacuum scale factor"] }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "en-single-topic",
+  "chat": {
+    "title": "Go error handling question",
+    "messages": [
+      { "role": "user", "content": "What's the idiomatic way to handle errors in Go? I keep seeing fmt.Errorf with %w and I'm not sure when to use it versus errors.New." },
+      { "role": "assistant", "content": "The core idea is wrapping: fmt.Errorf(\"doing X: %w\", err) preserves the original error so callers can use errors.Is and errors.As. Use errors.New for fresh sentinel errors with no context to add." },
+      { "role": "user", "content": "So when should I define a sentinel error like var ErrNotFound = errors.New(...)?" },
+      { "role": "assistant", "content": "Define sentinels when callers need to branch on the failure, e.g. if errors.Is(err, ErrNotFound). Keep them package-level, with names starting Err. For one-off failures just wrap with context instead." },
+      { "role": "user", "content": "Got it. And errors.As is for matching types?" },
+      { "role": "assistant", "content": "Exactly. errors.As finds an error in the chain that matches a target type, like a *PathError, so you can inspect fields. Prefer Is/As over direct equality checks because wrapping breaks direct comparison." }
+    ]
+  },
+  "collection": [
+    "Go error handling patterns: wrapping with %w, sentinel errors, errors.Is and errors.As",
+    "Office coffee machine maintenance schedule and descaling steps"
+  ],
+  "expected": [
+    { "topic_contains": "error", "briefs": ["Go error handling patterns: wrapping with %w, sentinel errors, errors.Is and errors.As"] }
+  ]
+}

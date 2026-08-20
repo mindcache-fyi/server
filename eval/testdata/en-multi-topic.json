@@ -1,0 +1,25 @@
+{
+  "name": "en-multi-topic",
+  "chat": {
+    "title": "Docker and CI questions",
+    "messages": [
+      { "role": "user", "content": "Two things today. First: what's the actual difference between Docker bridge and host networking?" },
+      { "role": "assistant", "content": "Bridge mode gives the container its own network namespace with a virtual interface on the docker0 bridge; containers reach the host via the gateway IP and publish ports explicitly. Host mode skips namespacing entirely: the container shares the host network stack, so no port publishing and lower overhead, but no isolation." },
+      { "role": "user", "content": "Makes sense. Unrelated: our CI pipeline is slow because every job re-downloads Go modules. How do people cache that?" },
+      { "role": "assistant", "content": "Cache the module directory keyed by go.sum's hash. In GitHub Actions that's actions/cache on ~/go/pkg/mod with key ${{ hashFiles('**/go.sum') }}. Restore before go build and you skip the downloads on cache hits." },
+      { "role": "user", "content": "Back to docker — if I use bridge mode, how do two containers talk to each other?" },
+      { "role": "assistant", "content": "Put them on the same user-defined bridge network (docker network create, then --network on both). They resolve each other by container name via the built-in DNS; the default bridge doesn't give you name resolution." },
+      { "role": "user", "content": "And for CI, does the build cache itself need separate handling from the module cache?" },
+      { "role": "assistant", "content": "Yes, cache the build cache separately: for Go that's ~/.cache/go-build, also keyed by go.sum plus optionally the toolchain version. Modules change rarely; the build cache changes every commit, so keep them as two cache entries." }
+    ]
+  },
+  "collection": [
+    "Docker networking: bridge vs host mode, inter-container DNS on user-defined bridges",
+    "CI performance: caching Go modules with go.sum keys and separate build cache",
+    "Houseplant watering schedule and light requirements"
+  ],
+  "expected": [
+    { "topic_contains": "docker", "briefs": ["Docker networking: bridge vs host mode, inter-container DNS on user-defined bridges"] },
+    { "topic_contains": "ci", "briefs": ["CI performance: caching Go modules with go.sum keys and separate build cache"] }
+  ]
+}

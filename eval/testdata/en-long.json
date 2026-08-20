@@ -1,0 +1,51 @@
+{
+  "name": "en-long",
+  "chat": {
+    "title": "Long thread on SQLite journal modes",
+    "messages": [
+      { "role": "user", "content": "Hi! Long session ahead — I'm migrating a desktop app's storage to SQLite and want to understand journal modes properly." },
+      { "role": "assistant", "content": "Happy to go deep. The short version: the default rollback journal mode blocks writers while readers hold the database; WAL mode lets readers and the writer proceed concurrently." },
+      { "role": "user", "content": "Before we dive in, what's the weather like where you are? Haha, kidding. Okay, why does WAL allow concurrent reads?" },
+      { "role": "assistant", "content": "WAL appends changes to a write-ahead log instead of overwriting pages. Readers keep reading the main database file as of their snapshot; only a checkpoint copies committed pages back. So a writer appending to the log never disturbs an active reader." },
+      { "role": "user", "content": "What are the downsides then?" },
+      { "role": "assistant", "content": "The WAL file can grow until a checkpoint runs, bulk imports are slower if they produce huge logs, and WAL needs shared-memory support on the filesystem — network filesystems are a common failure case." },
+      { "role": "user", "content": "Right, we had NFS issues with other databases before. How do checkpoints actually happen?" },
+      { "role": "assistant", "content": "Automatically: when the WAL reaches 1000 pages by default, SQLite runs a passive checkpoint in the background of whatever connection committed. You can also PRAGMA wal_checkpoint manually, with TRUNCATE or RESTART to shrink the file." },
+      { "role": "user", "content": "Is a passive checkpoint allowed to fail?" },
+      { "role": "assistant", "content": "Yes — it skips pages that readers are still using. That's fine; they'll be checkpointed later. The database stays consistent either way." },
+      { "role": "user", "content": "Switching topics for a second — do you know a good snack for long coding sessions?" },
+      { "role": "assistant", "content": "Nuts and fruit keep the hands busy without the keyboard crumbs of chips. But back to SQLite whenever you're ready!" },
+      { "role": "user", "content": "Haha okay. Now: what pragmas do you recommend alongside WAL for a desktop app?" },
+      { "role": "assistant", "content": "Typically: journal_mode=WAL, synchronous=NORMAL (safe with WAL, much faster than FULL), a busy_timeout of a few seconds, and temp_store=MEMORY. Keep one writer connection and serialize writes." },
+      { "role": "user", "content": "Why does synchronous=NORMAL stay safe under WAL?" },
+      { "role": "assistant", "content": "The WAL protocol only needs the log durable at checkpoint boundaries; NORMAL fsyncs at those points. A power loss can lose the last transaction but never corrupts the database — FULL additionally protects every commit at a large speed cost." },
+      { "role": "user", "content": "Got it. And busy_timeout — does it apply to lock acquisition only?" },
+      { "role": "assistant", "content": "It bounds how long a connection retries when it finds the database locked, writer or reader. When it expires you get SQLITE_BUSY; in WAL you mostly see it between competing writers." },
+      { "role": "user", "content": "We'll have one writer anyway. What about memory-mapped I/O?" },
+      { "role": "assistant", "content": "mmap_size can speed read-heavy workloads by mapping the file, but keep it modest and remember it adds no safety. For a desktop app with moderate data, default paging is usually enough." },
+      { "role": "user", "content": "Fair. How do I migrate an existing database file to WAL without losing data?" },
+      { "role": "assistant", "content": "Just run PRAGMA journal_mode=WAL on the open database; it converts in place. Do it once and persist it — the journal mode is stored in the file header, so it survives restarts." },
+      { "role": "user", "content": "And back again if we ever need to?" },
+      { "role": "assistant", "content": "Same pragma with DELETE. One caveat: you need exclusive access during the switch, and a checkpoint runs to fold the log back in." },
+      { "role": "user", "content": "What happens to the WAL and SHM files when the last connection closes?" },
+      { "role": "assistant", "content": "A clean close checkpoints and deletes both files by default. If you see a leftover WAL, something exited uncleanly — the next open recovers it automatically." },
+      { "role": "user", "content": "Reassuring. One more: does WAL change how vacuum works?" },
+      { "role": "assistant", "content": "VACUUM still rebuilds the database; under WAL it writes through the log like any other change. It briefly needs disk space for the copy, and you can't run it inside a transaction." },
+      { "role": "user", "content": "We rarely delete rows, so vacuum probably doesn't matter much. Anything else you'd warn about for desktop SQLite?" },
+      { "role": "assistant", "content": "Three things: keep the database off synced network volumes, open with a single writer, and set a realistic busy_timeout. Also back up by copying with the online backup API rather than copying raw files mid-write." },
+      { "role": "user", "content": "The backup API — does that just hold a read transaction?" },
+      { "role": "assistant", "content": "It iterates pages under a consistent snapshot, so it's safe while writers proceed (under WAL). sqlite3 .backup uses it under the hood." },
+      { "role": "user", "content": "Perfect. Last one for today: how do I verify all this is actually in effect after opening the database?" },
+      { "role": "assistant", "content": "Query the pragmas back: journal_mode should answer 'wal', and synchronous should report 1 (NORMAL). Add a startup sanity check that fails fast if the file was created with different settings." },
+      { "role": "user", "content": "Great, that's everything for now. Thanks for the marathon session!" },
+      { "role": "assistant", "content": "Anytime — good luck with the migration!" }
+    ]
+  },
+  "collection": [
+    "SQLite WAL mode: concurrency, checkpoints, synchronous=NORMAL, migration pragmas",
+    "Standing desk ergonomics and posture reminders"
+  ],
+  "expected": [
+    { "topic_contains": "sqlite", "briefs": ["SQLite WAL mode: concurrency, checkpoints, synchronous=NORMAL, migration pragmas"] }
+  ]
+}

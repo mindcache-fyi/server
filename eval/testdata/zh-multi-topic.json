@@ -1,0 +1,25 @@
+{
+  "name": "zh-multi-topic",
+  "chat": {
+    "title": "K8s 部署和周会流程",
+    "messages": [
+      { "role": "user", "content": "先问个 K8s 的问题：服务滚动更新时怎么做到零中断？" },
+      { "role": "assistant", "content": "关键在两端：Pod 要配 readinessProbe，新 Pod 就绪后才接流量；Deployment 用 RollingUpdate 并设置 maxUnavailable=0，再给旧 Pod 足够的 terminationGracePeriodSeconds 处理完存量请求，preStop 里睡几秒等 endpoints 收敛。" },
+      { "role": "user", "content": "健康检查我们现在只有 liveness，加 readiness 就行吗？" },
+      { "role": "assistant", "content": "对，readiness 决定接不接流量，liveness 只决定杀不杀 Pod。注意 readiness 要探到真实依赖就绪（比如连上数据库），别只查进程活着。" },
+      { "role": "user", "content": "换个话题：我们团队周会总是超时，一小时经常讨论不完，有什么改进办法？" },
+      { "role": "assistant", "content": "常见做法：提前一天收集议题并限定每议题时长，会上只决策不展开细节，需要细聊的拆成小会；再用固定模板记录结论和责任人，下次会前先过上次待办。" },
+      { "role": "user", "content": "回到 K8s——如果发布后发现新版本有问题，回滚要多久？" },
+      { "role": "assistant", "content": "kubectl rollout undo 秒级触发，回到上一个 ReplicaSet；真正的耗时在新旧切换的过渡窗口。保留几个历史版本（revisionHistoryLimit），并给回滚也走同样的就绪检查。" }
+    ]
+  },
+  "collection": [
+    "K8s 零中断发布: readinessProbe, RollingUpdate, 优雅终止与回滚",
+    "团队例会改进: 议题预收集, 限时决策, 结论与责任人跟踪",
+    "周末徒步路线收藏: 坡度、补给点与天气窗口"
+  ],
+  "expected": [
+    { "topic_contains": "k8s", "briefs": ["K8s 零中断发布: readinessProbe, RollingUpdate, 优雅终止与回滚"] },
+    { "topic_contains": "周会", "briefs": ["团队例会改进: 议题预收集, 限时决策, 结论与责任人跟踪"] }
+  ]
+}

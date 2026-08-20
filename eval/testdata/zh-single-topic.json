@@ -1,0 +1,21 @@
+{
+  "name": "zh-single-topic",
+  "chat": {
+    "title": "前端首屏优化",
+    "messages": [
+      { "role": "user", "content": "我们官网首屏加载要 4 秒多，有没有系统性的优化思路？" },
+      { "role": "assistant", "content": "先从三方面入手：一是减少关键资源体积，做代码分割和路由级懒加载，把非首屏组件延迟加载；二是加速资源下发，静态资源上 CDN 并开启压缩；三是缩短渲染链路，关键 CSS 内联、脚本加 defer，避免阻塞首次绘制。" },
+      { "role": "user", "content": "代码分割具体怎么拆比较合理？按路由还是按组件？" },
+      { "role": "assistant", "content": "默认按路由拆，每个路由一个 chunk；路由内的大组件（图表、编辑器）再单独懒加载。拆得太碎会增加请求数，一般用构建工具的 splitChunks 把公共依赖提成共享 chunk。" },
+      { "role": "user", "content": "那图片有什么要注意的吗？首屏有好几张产品大图。" },
+      { "role": "assistant", "content": "首屏图用现代格式（AVIF/WebP）并配好响应式尺寸，非首屏图一律 loading=lazy；可以再加一层 LQIP 占位避免布局抖动。做完后用 Lighthouse 看 LCP 是否落在目标内。" }
+    ]
+  },
+  "collection": [
+    "前端性能优化: 首屏加载, 代码分割, 懒加载, CDN 与压缩",
+    "家庭月度预算规划与记账方法"
+  ],
+  "expected": [
+    { "topic_contains": "首屏", "briefs": ["前端性能优化: 首屏加载, 代码分割, 懒加载, CDN 与压缩"] }
+  ]
+}
