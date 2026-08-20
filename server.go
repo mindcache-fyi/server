@@ -69,8 +69,18 @@ func New(cfg *Config) (*App, error) {
 	}
 
 	repo := store.NewMindcacheRepo(db)
-	analyseSvc := service.NewAnalyseService(kv, repo, llm, cfg.LLMMaxInputChars)
-	mindcacheSvc := service.NewMindcacheService(repo, storage, llm, kv, cfg.LLMMaxInputChars)
+
+	// Optional embedding endpoint for retrieval-augmented matching. NewEmbedder
+	// probes once and returns nil when unconfigured or unreachable, so the
+	// feature degrades to full-list matching without any extra conditionals.
+	embedder := service.NewEmbedder(cfg.EmbedBaseURL, cfg.EmbedAPIKey, cfg.EmbedModel, cfg.LLMMaxConcurrency)
+
+	analyseSvc := service.NewAnalyseService(kv, repo, llm, cfg.LLMMaxInputChars, embedder, repo, cfg.MatchCandidateK, cfg.MinEmbedCollection)
+	mindcacheSvc := service.NewMindcacheService(repo, storage, llm, kv, cfg.LLMMaxInputChars, embedder)
+
+	if embedder != nil {
+		go service.BackfillEmbeddings(context.Background(), repo, embedder)
+	}
 
 	healthH := handler.NewHealthHandler(db, storage, llm)
 	analyseH := handler.NewAnalyseHandler(analyseSvc)

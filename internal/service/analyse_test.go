@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mindcache-fyi/server/internal/model"
@@ -37,7 +38,7 @@ func (m *scriptedLLM) IsConfigured() bool { return true }
 func (m *scriptedLLM) GetConfig() LLMConfig { return LLMConfig{} }
 
 func newTestAnalyseService(llm LLM, maxInputChars int) *AnalyseService {
-	return NewAnalyseService(nil, nil, llm, maxInputChars)
+	return NewAnalyseService(nil, nil, llm, maxInputChars, nil, nil, 0, 0)
 }
 
 func testChat(content string) model.Chat {
@@ -418,5 +419,144 @@ func TestExtractTopics_NoMessagesLegacy(t *testing.T) {
 	}
 	if strings.Contains(llm.lastSystem, `"messages": [i, ...]`) {
 		t.Error("system prompt must not include the messages addendum for flat chats")
+	}
+}
+
+// fakeEmbedder is a scripted EmbeddingsProvider returning vecs in order, one
+// per input text of each call.
+type fakeEmbedder struct {
+	mu    sync.Mutex
+	dims  int
+	calls int
+	vecs  [][]float32
+	err   error
+}
+
+func (f *fakeEmbedder) Dims() int { return f.dims }
+
+func (f *fakeEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([][]float32, 0, len(texts))
+	for i := range texts {
+		if i < len(f.vecs) {
+			out = append(out, f.vecs[i])
+		} else {
+			out = append(out, nil)
+		}
+	}
+	return out, nil
+}
+
+type fakeEmbedStore struct {
+	blobs map[string][]byte
+}
+
+func (s *fakeEmbedStore) SetEmbedding(_ context.Context, id string, blob []byte) error {
+	s.blobs[id] = blob
+	return nil
+}
+
+func (s *fakeEmbedStore) ListEmbeddings(_ context.Context) (map[string][]byte, error) {
+	return s.blobs, nil
+}
+
+func retrievalTestMindcaches() []model.Mindcache {
+	return []model.Mindcache{
+		{ID: "mc-1", Brief: "Postgres tuning"},
+		{ID: "mc-2", Brief: "Docker networking"},
+		{ID: "mc-3", Brief: "Baking sourdough"},
+	}
+}
+
+func newRetrievalService(llm LLM, emb *fakeEmbedder, blobs map[string][]byte, minCollection int) *AnalyseService {
+	return NewAnalyseService(nil, nil, llm, 0, emb, &fakeEmbedStore{blobs: blobs}, 2, minCollection)
+}
+
+func retrievalTestBlobs(t *testing.T) map[string][]byte {
+	t.Helper()
+	return map[string][]byte{
+		"mc-1": encodeFloat32s([]float32{1, 0}),
+		"mc-2": encodeFloat32s([]float32{0.9, 0.1}),
+		"mc-3": encodeFloat32s([]float32{0, 1}),
+	}
+}
+
+func TestMatchMindcaches_RetrievalFiltersCandidates(t *testing.T) {
+	llm := &scriptedLLM{replies: []string{`{"matches":{"1":[2]}}`}}
+	emb := &fakeEmbedder{dims: 2, vecs: [][]float32{{1, 0}}}
+	svc := newRetrievalService(llm, emb, retrievalTestBlobs(t), 1)
+
+	topics := []model.Topic{{TopicID: "topic-a", Brief: "container bridge networks"}}
+	matches, err := svc.matchMindcaches(context.Background(), topics, retrievalTestMindcaches())
+	if err != nil {
+		t.Fatalf("matchMindcaches: %v", err)
+	}
+	if got := matches["topic-a"]; len(got) != 1 || got[0] != "mc-2" {
+		t.Errorf("matches = %v, want topic-a -> [mc-2]", matches)
+	}
+	if !strings.Contains(llm.lastUser, "Docker networking") || !strings.Contains(llm.lastUser, "Postgres tuning") {
+		t.Errorf("prompt must contain the retrieved candidates: %q", llm.lastUser)
+	}
+	if strings.Contains(llm.lastUser, "Baking sourdough") {
+		t.Errorf("prompt must not contain non-candidates: %q", llm.lastUser)
+	}
+}
+
+func TestMatchMindcaches_RetrievalFailureFallsBack(t *testing.T) {
+	llm := &scriptedLLM{replies: []string{`{"matches":{"1":[3]}}`}}
+	emb := &fakeEmbedder{dims: 2, err: errors.New("endpoint down")}
+	svc := newRetrievalService(llm, emb, retrievalTestBlobs(t), 1)
+
+	topics := []model.Topic{{TopicID: "topic-a", Brief: "container bridge networks"}}
+	matches, err := svc.matchMindcaches(context.Background(), topics, retrievalTestMindcaches())
+	if err != nil {
+		t.Fatalf("matchMindcaches: %v", err)
+	}
+	if got := matches["topic-a"]; len(got) != 1 || got[0] != "mc-3" {
+		t.Errorf("matches = %v, want fallback full-list result topic-a -> [mc-3]", matches)
+	}
+	for _, brief := range []string{"Postgres tuning", "Docker networking", "Baking sourdough"} {
+		if !strings.Contains(llm.lastUser, brief) {
+			t.Errorf("fallback prompt must contain %q", brief)
+		}
+	}
+}
+
+func TestMatchMindcaches_SmallCollectionSkipsRetrieval(t *testing.T) {
+	llm := &scriptedLLM{replies: []string{`{"matches":{}}`}}
+	emb := &fakeEmbedder{dims: 2, vecs: [][]float32{{1, 0}}}
+	svc := newRetrievalService(llm, emb, retrievalTestBlobs(t), 3)
+
+	topics := []model.Topic{{TopicID: "topic-a", Brief: "container bridge networks"}}
+	if _, err := svc.matchMindcaches(context.Background(), topics, retrievalTestMindcaches()); err != nil {
+		t.Fatalf("matchMindcaches: %v", err)
+	}
+	if emb.calls != 0 {
+		t.Errorf("embedder calls = %d, want 0 for small collections", emb.calls)
+	}
+}
+
+func TestMatchMindcaches_NoCandidatesSkipsLLM(t *testing.T) {
+	llm := &scriptedLLM{}
+	emb := &fakeEmbedder{dims: 2, vecs: [][]float32{{0, 1}}} // orthogonal to the only stored vector
+	svc := newRetrievalService(llm, emb, map[string][]byte{
+		"mc-1": encodeFloat32s([]float32{1, 0}),
+	}, 0)
+
+	topics := []model.Topic{{TopicID: "topic-a", Brief: "orthogonal subject"}}
+	matches, err := svc.matchMindcaches(context.Background(), topics, []model.Mindcache{{ID: "mc-1", Brief: "Postgres tuning"}})
+	if err != nil {
+		t.Fatalf("matchMindcaches: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("matches = %v, want empty", matches)
+	}
+	if llm.calls != 0 {
+		t.Errorf("llm calls = %d, want 0 when retrieval finds no candidates", llm.calls)
 	}
 }

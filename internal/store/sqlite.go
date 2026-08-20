@@ -173,8 +173,41 @@ func (r *MindcacheRepo) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("delete mindcache: %w", err)
 	}
-
 	return nil
+}
+
+// SetEmbedding stores the embedding vector blob of the mindcache with the
+// given id.
+func (r *MindcacheRepo) SetEmbedding(ctx context.Context, id string, blob []byte) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE Mindcache SET embedding = ? WHERE id = ?`, blob, id)
+	if err != nil {
+		return fmt.Errorf("set embedding: %w", err)
+	}
+	return nil
+}
+
+// ListEmbeddings returns the raw embedding blobs of every mindcache that has
+// one, keyed by mindcache id.
+func (r *MindcacheRepo) ListEmbeddings(ctx context.Context) (map[string][]byte, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, embedding FROM Mindcache WHERE embedding IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("query embeddings: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make(map[string][]byte)
+	for rows.Next() {
+		var id string
+		var blob []byte
+		if err := rows.Scan(&id, &blob); err != nil {
+			return nil, fmt.Errorf("scan embedding: %w", err)
+		}
+		out[id] = blob
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate embeddings: %w", err)
+	}
+	return out, nil
 }
 
 type scanner interface {

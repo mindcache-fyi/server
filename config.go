@@ -21,6 +21,18 @@ type Config struct {
 	// LLMMaxInputChars caps conversation text sent to the LLM per call.
 	// Values <= 0 disable the cap.
 	LLMMaxInputChars int
+	// EmbedBaseURL/EmbedAPIKey/EmbedModel configure the optional embedding
+	// endpoint used to retrieve matching candidates. EmbedModel empty means
+	// the feature is disabled; empty BaseURL/APIKey fall back to the LLM
+	// values.
+	EmbedBaseURL string
+	EmbedAPIKey  string
+	EmbedModel   string
+	// MatchCandidateK bounds the retrieval candidates per topic.
+	MatchCandidateK int
+	// MinEmbedCollection is the collection size above which embedding
+	// retrieval is used (smaller collections match against the full list).
+	MinEmbedCollection int
 
 	// PublicFS optionally overrides the on-disk public/ directory for
 	// static content served at the site root (e.g. an embedded SPA).
@@ -50,6 +62,11 @@ func LoadConfigFromEnv() (*Config, error) {
 		LLMModel:          getEnv("LLM_MODEL", ""),
 		LLMMaxConcurrency: getEnvInt("LLM_MAX_CONCURRENCY", 1),
 		LLMMaxInputChars:  getEnvInt("LLM_MAX_INPUT_CHARS", 100000),
+		EmbedBaseURL:      getEnv("EMBED_BASE_URL", ""),
+		EmbedAPIKey:       getEnv("EMBED_API_KEY", ""),
+		EmbedModel:        getEnv("EMBED_MODEL", ""),
+		MatchCandidateK:   getEnvInt("MATCH_CANDIDATE_K", 5),
+		MinEmbedCollection: getEnvInt("EMBED_MIN_COLLECTION", 30),
 	}
 
 	if c.IsDev() {
@@ -59,6 +76,13 @@ func LoadConfigFromEnv() (*Config, error) {
 		if c.LLMModel == "" {
 			c.LLMModel = "google/gemma-4-e2b"
 		}
+	}
+
+	if c.EmbedBaseURL == "" {
+		c.EmbedBaseURL = c.LLMBaseURL
+	}
+	if c.EmbedAPIKey == "" {
+		c.EmbedAPIKey = c.LLMAPIKey
 	}
 
 	if err := c.validate(); err != nil {

@@ -47,11 +47,13 @@ type MindcacheService struct {
 	createDedup   *dedup.Deduplicator[model.Mindcache]
 	updateDedup   *dedup.Deduplicator[bool]
 	maxInputChars int
+	embedder      EmbeddingsProvider
 }
 
 // NewMindcacheService creates a MindcacheService. maxInputChars caps the
 // conversation text sent to the LLM per call; values <= 0 disable the cap.
-func NewMindcacheService(repo *store.MindcacheRepo, storage *Storage, llm LLM, kv *cache.KVCache, maxInputChars int) *MindcacheService {
+// embedder may be nil — briefs are then never embedded.
+func NewMindcacheService(repo *store.MindcacheRepo, storage *Storage, llm LLM, kv *cache.KVCache, maxInputChars int, embedder EmbeddingsProvider) *MindcacheService {
 	return &MindcacheService{
 		repo:          repo,
 		storage:       storage,
@@ -60,6 +62,7 @@ func NewMindcacheService(repo *store.MindcacheRepo, storage *Storage, llm LLM, k
 		createDedup:   dedup.NewDeduplicator[model.Mindcache](30 * time.Minute),
 		updateDedup:   dedup.NewDeduplicator[bool](30 * time.Minute),
 		maxInputChars: maxInputChars,
+		embedder:      embedder,
 	}
 }
 
@@ -138,6 +141,8 @@ func (s *MindcacheService) doCreateFromTopic(ctx context.Context, topicId string
 	if err := s.storage.Write(ctx, model.MindcacheMainPath(mc.ID), []byte(mainContent)); err != nil {
 		return model.Mindcache{}, err
 	}
+
+	embedBrief(ctx, s.embedder, s.repo, mc.ID, mc.Brief)
 
 	appendSourceRecord(ctx, s.storage, mc.ID, sourceRecordFromTopic(chat, topic))
 
@@ -220,6 +225,8 @@ func (s *MindcacheService) doUpdate(ctx context.Context, mindcacheId, topicId st
 	if err := s.repo.Update(ctx, mindcacheId, integrated.Brief, sourceUrls); err != nil {
 		return false, err
 	}
+
+	embedBrief(ctx, s.embedder, s.repo, mindcacheId, integrated.Brief)
 
 	appendSourceRecord(ctx, s.storage, mindcacheId, sourceRecordFromTopic(chat, topic))
 

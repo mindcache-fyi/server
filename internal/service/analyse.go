@@ -63,22 +63,36 @@ type AnalyseResult struct {
 
 // AnalyseService extracts topics from chats and matches them to mindcaches.
 type AnalyseService struct {
-	kv            *cache.KVCache
-	repo          *store.MindcacheRepo
-	llm           LLM
-	dedup         *dedup.Deduplicator[*AnalyseResult]
-	maxInputChars int
+	kv                 *cache.KVCache
+	repo               *store.MindcacheRepo
+	llm                LLM
+	dedup              *dedup.Deduplicator[*AnalyseResult]
+	maxInputChars      int
+	embedder           EmbeddingsProvider
+	embeddings         embeddingStore
+	candidateK         int
+	minEmbedCollection int
 }
+
+// Compile-time check that the concrete repo satisfies the embedding store.
+var _ embeddingStore = (*store.MindcacheRepo)(nil)
 
 // NewAnalyseService creates an AnalyseService. maxInputChars caps the
 // conversation text sent to the LLM per call; values <= 0 disable the cap.
-func NewAnalyseService(kv *cache.KVCache, repo *store.MindcacheRepo, llm LLM, maxInputChars int) *AnalyseService {
+// embedder/embeddings may be nil — matching then always uses the full
+// mindcache list. candidateK bounds retrieval candidates per topic and
+// minEmbedCollection is the collection size above which retrieval is used.
+func NewAnalyseService(kv *cache.KVCache, repo *store.MindcacheRepo, llm LLM, maxInputChars int, embedder EmbeddingsProvider, embeddings embeddingStore, candidateK, minEmbedCollection int) *AnalyseService {
 	return &AnalyseService{
-		kv:            kv,
-		repo:          repo,
-		llm:           llm,
-		dedup:         dedup.NewDeduplicator[*AnalyseResult](30 * time.Minute),
-		maxInputChars: maxInputChars,
+		kv:                 kv,
+		repo:               repo,
+		llm:                llm,
+		dedup:              dedup.NewDeduplicator[*AnalyseResult](30 * time.Minute),
+		maxInputChars:      maxInputChars,
+		embedder:           embedder,
+		embeddings:         embeddings,
+		candidateK:         candidateK,
+		minEmbedCollection: minEmbedCollection,
 	}
 }
 
@@ -374,12 +388,24 @@ func (s *AnalyseService) matchMindcaches(ctx context.Context, topics []model.Top
 		return map[string][]string{}, nil
 	}
 
+	candidates := mindcaches
+	if s.embedder != nil && s.embeddings != nil && len(mindcaches) > s.minEmbedCollection {
+		retrieved, err := s.retrieveCandidates(ctx, topics, mindcaches)
+		if err != nil {
+			slog.Warn("embedding retrieval failed; matching against full list", "error", err)
+		} else if len(retrieved) == 0 {
+			return map[string][]string{}, nil
+		} else {
+			candidates = retrieved
+		}
+	}
+
 	topicLines := make([]string, 0, len(topics))
 	for i, t := range topics {
 		topicLines = append(topicLines, fmt.Sprintf("%d. %s", i+1, t.Brief))
 	}
-	mcLines := make([]string, 0, len(mindcaches))
-	for i, mc := range mindcaches {
+	mcLines := make([]string, 0, len(candidates))
+	for i, mc := range candidates {
 		mcLines = append(mcLines, fmt.Sprintf("%d. %s", i+1, mc.Brief))
 	}
 
@@ -400,10 +426,10 @@ func (s *AnalyseService) matchMindcaches(ctx context.Context, topics []model.Top
 		seen := make(map[string]bool, len(mcIdxs))
 		ids := make([]string, 0, len(mcIdxs))
 		for _, mcIdx := range mcIdxs {
-			if mcIdx < 1 || mcIdx > len(mindcaches) {
+			if mcIdx < 1 || mcIdx > len(candidates) {
 				continue
 			}
-			mcID := mindcaches[mcIdx-1].ID
+			mcID := candidates[mcIdx-1].ID
 			if seen[mcID] {
 				continue
 			}
@@ -418,6 +444,61 @@ func (s *AnalyseService) matchMindcaches(ctx context.Context, topics []model.Top
 		}
 	}
 	return matches, nil
+}
+
+// retrieveCandidates narrows the mindcache list down to the most similar
+// candidates per topic using embedding similarity, so the LLM matches
+// against a short list instead of the whole collection. Stored vectors with
+// a mismatching dimensionality (e.g. after switching embedding models) are
+// treated as missing.
+func (s *AnalyseService) retrieveCandidates(ctx context.Context, topics []model.Topic, mindcaches []model.Mindcache) ([]model.Mindcache, error) {
+	briefs := make([]string, len(topics))
+	for i, t := range topics {
+		briefs[i] = t.Brief
+	}
+	topicVecs, err := s.embedder.Embed(ctx, briefs)
+	if err != nil {
+		return nil, err
+	}
+	if len(topicVecs) != len(topics) {
+		return nil, fmt.Errorf("embedding count mismatch: got %d for %d topics", len(topicVecs), len(topics))
+	}
+
+	stored, err := s.embeddings.ListEmbeddings(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	vecs := make([][]float32, len(mindcaches))
+	for i, mc := range mindcaches {
+		blob, ok := stored[mc.ID]
+		if !ok {
+			continue
+		}
+		vec, err := decodeFloat32s(blob)
+		if err != nil || len(vec) != s.embedder.Dims() {
+			continue
+		}
+		vecs[i] = vec
+	}
+
+	chosen := make(map[int]bool)
+	for _, tv := range topicVecs {
+		for _, idx := range topKIndices(tv, vecs, s.candidateK) {
+			chosen[idx] = true
+		}
+	}
+	if len(chosen) == 0 {
+		return nil, nil
+	}
+
+	out := make([]model.Mindcache, 0, len(chosen))
+	for i, mc := range mindcaches {
+		if chosen[i] {
+			out = append(out, mc)
+		}
+	}
+	return out, nil
 }
 
 // parseLLMJSONInto unmarshals an LLM reply into out, tolerating markdown
