@@ -54,6 +54,27 @@ MINDCACHES:
 Respond with a JSON object in exactly this format:
 { "matches": { "<topic number>": [<mindcache number>, ...], ... } }`
 
+// unifiedSystemPrompt drives the single-call analysis mode: topic extraction
+// and mindcache matching happen together.
+const unifiedSystemPrompt = `You are a knowledge-organisation specialist. Read the conversation and produce lasting notes ("topics") for it.
+
+Rules:
+- Extract at most 10 topics; merge duplicates so the list is as short as the content allows. No two topics may cover the same subject.
+- For each topic give a short title (up to 40 characters) and a self-contained, descriptive brief (up to 80 characters). Write them in the main language of the conversation.
+- You also receive the user's existing mindcaches (knowledge notes). For each topic list the 0-3 most relevant mindcaches. Relevant means the same subject: a reader would expect to find both in the same note. Judge by meaning, not by shared wording, and match across languages when the subjects are the same.
+- Return ONLY a valid JSON object — no markdown fences, no text outside the JSON.
+
+Respond with a JSON object in exactly this format:
+{ "topics": [ { "title": "...", "brief": "...", "matches": [<mindcache number>, ...] } ] }`
+
+// unifiedMessagesAddendum extends the unified prompt when the chat carries
+// structured messages.
+const unifiedMessagesAddendum = `
+The conversation is given as numbered messages: [i] role: text. For each topic, also list the numbers of all messages that support it in "messages" — at most 10, and only numbers that appear in the conversation.
+
+The JSON format becomes:
+{ "topics": [ { "title": "...", "brief": "...", "messages": [i, ...], "matches": [<mindcache number>, ...] } ] }`
+
 // AnalyseResult holds the output of analysing a chat.
 type AnalyseResult struct {
 	Topics            []model.Topic
@@ -61,10 +82,16 @@ type AnalyseResult struct {
 	Mindcaches        []model.Mindcache
 }
 
+// MindcacheLister is the read surface of the mindcache store needed by the
+// analyse pipeline. *store.MindcacheRepo satisfies it.
+type MindcacheLister interface {
+	List(ctx context.Context) ([]model.Mindcache, error)
+}
+
 // AnalyseService extracts topics from chats and matches them to mindcaches.
 type AnalyseService struct {
 	kv                 *cache.KVCache
-	repo               *store.MindcacheRepo
+	repo               MindcacheLister
 	llm                LLM
 	dedup              *dedup.Deduplicator[*AnalyseResult]
 	maxInputChars      int
@@ -72,17 +99,29 @@ type AnalyseService struct {
 	embeddings         embeddingStore
 	candidateK         int
 	minEmbedCollection int
+	analyseMode        string
 }
 
-// Compile-time check that the concrete repo satisfies the embedding store.
-var _ embeddingStore = (*store.MindcacheRepo)(nil)
+// Analysis pipeline modes used by AnalyseService.
+const (
+	ModeStaged  = "staged"
+	ModeUnified = "unified"
+)
+
+// Compile-time checks that the concrete repo satisfies the service deps.
+var (
+	_ embeddingStore  = (*store.MindcacheRepo)(nil)
+	_ MindcacheLister = (*store.MindcacheRepo)(nil)
+)
 
 // NewAnalyseService creates an AnalyseService. maxInputChars caps the
 // conversation text sent to the LLM per call; values <= 0 disable the cap.
 // embedder/embeddings may be nil — matching then always uses the full
 // mindcache list. candidateK bounds retrieval candidates per topic and
 // minEmbedCollection is the collection size above which retrieval is used.
-func NewAnalyseService(kv *cache.KVCache, repo *store.MindcacheRepo, llm LLM, maxInputChars int, embedder EmbeddingsProvider, embeddings embeddingStore, candidateK, minEmbedCollection int) *AnalyseService {
+// analyseMode selects the pipeline: ModeUnified runs a single LLM call;
+// anything else runs the staged two-call pipeline.
+func NewAnalyseService(kv *cache.KVCache, repo MindcacheLister, llm LLM, maxInputChars int, embedder EmbeddingsProvider, embeddings embeddingStore, candidateK, minEmbedCollection int, analyseMode string) *AnalyseService {
 	return &AnalyseService{
 		kv:                 kv,
 		repo:               repo,
@@ -93,6 +132,7 @@ func NewAnalyseService(kv *cache.KVCache, repo *store.MindcacheRepo, llm LLM, ma
 		embeddings:         embeddings,
 		candidateK:         candidateK,
 		minEmbedCollection: minEmbedCollection,
+		analyseMode:        analyseMode,
 	}
 }
 
@@ -133,7 +173,7 @@ func (s *AnalyseService) ClearCache(ctx context.Context, chat model.Chat) (bool,
 }
 
 func (s *AnalyseService) doAnalyse(ctx context.Context, chat model.Chat) (*AnalyseResult, error) {
-	slog.Info("starting analysis", "chat", chat.ChatID)
+	slog.Info("starting analysis", "chat", chat.ChatID, "mode", s.analyseMode)
 
 	chatJSON, err := json.Marshal(chat)
 	if err != nil {
@@ -141,29 +181,60 @@ func (s *AnalyseService) doAnalyse(ctx context.Context, chat model.Chat) (*Analy
 	}
 	s.kv.Set(chatKey(chat.ChatID), string(chatJSON))
 
-	topics, err := s.extractTopics(ctx, chat)
-	if err != nil {
-		return nil, err
-	}
+	var (
+		topics            []model.Topic
+		topicMindcacheMap map[string][]string
+		matched           []model.Mindcache
+	)
 
-	for _, topic := range topics {
-		topicJSON, err := json.Marshal(topic)
+	if s.analyseMode == ModeUnified {
+		topics, topicMindcacheMap, matched, err = s.analyseUnified(ctx, chat)
 		if err != nil {
 			return nil, err
 		}
+	} else {
+		topics, err = s.extractTopics(ctx, chat)
+		if err != nil {
+			return nil, err
+		}
+
+		mindcaches, err := s.repo.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		topicMindcacheMap, err = s.matchMindcaches(ctx, topics, mindcaches)
+		if err != nil {
+			return nil, err
+		}
+		matched = matchedFromMap(mindcaches, topicMindcacheMap)
+	}
+
+	if err := s.cacheTopics(topics); err != nil {
+		return nil, err
+	}
+
+	return &AnalyseResult{
+		Topics:            topics,
+		TopicMindcacheMap: topicMindcacheMap,
+		Mindcaches:        matched,
+	}, nil
+}
+
+// cacheTopics persists topics in the KV cache so create/update can find them.
+func (s *AnalyseService) cacheTopics(topics []model.Topic) error {
+	for _, topic := range topics {
+		topicJSON, err := json.Marshal(topic)
+		if err != nil {
+			return err
+		}
 		s.kv.Set(topicKey(topic.TopicID), string(topicJSON))
 	}
+	return nil
+}
 
-	mindcaches, err := s.repo.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	topicMindcacheMap, err := s.matchMindcaches(ctx, topics, mindcaches)
-	if err != nil {
-		return nil, err
-	}
-
+// matchedFromMap filters mindcaches down to those referenced by the match map.
+func matchedFromMap(mindcaches []model.Mindcache, topicMindcacheMap map[string][]string) []model.Mindcache {
 	matchedIDs := make(map[string]bool)
 	for _, ids := range topicMindcacheMap {
 		for _, id := range ids {
@@ -176,12 +247,7 @@ func (s *AnalyseService) doAnalyse(ctx context.Context, chat model.Chat) (*Analy
 			matched = append(matched, mc)
 		}
 	}
-
-	return &AnalyseResult{
-		Topics:            topics,
-		TopicMindcacheMap: topicMindcacheMap,
-		Mindcaches:        matched,
-	}, nil
+	return matched
 }
 
 type topicsResponse struct {
@@ -499,6 +565,93 @@ func (s *AnalyseService) retrieveCandidates(ctx context.Context, topics []model.
 		}
 	}
 	return out, nil
+}
+
+type unifiedResponse struct {
+	Topics []struct {
+		Title    string `json:"title"`
+		Brief    string `json:"brief"`
+		Messages []int  `json:"messages"`
+		Matches  []int  `json:"matches"`
+	} `json:"topics"`
+}
+
+// analyseUnified extracts topics and matches them against existing
+// mindcaches in a single LLM call. Unlike the staged pipeline it always
+// matches against the full collection — embedding retrieval needs topic
+// briefs, which do not exist before this call.
+func (s *AnalyseService) analyseUnified(ctx context.Context, chat model.Chat) ([]model.Topic, map[string][]string, []model.Mindcache, error) {
+	mindcaches, err := s.repo.List(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	title := chat.Title
+	if title == "" {
+		title = "(untitled)"
+	}
+	conversation, indexMap := formatConversation(chat, s.maxInputChars)
+	userMessage := fmt.Sprintf("Title: %s\n\nConversation:\n%s", title, conversation)
+	if len(mindcaches) > 0 {
+		mcLines := make([]string, 0, len(mindcaches))
+		for i, mc := range mindcaches {
+			mcLines = append(mcLines, fmt.Sprintf("%d. %s", i+1, mc.Brief))
+		}
+		userMessage += "\n\nMINDCACHES:\n" + strings.Join(mcLines, "\n")
+	}
+
+	systemPrompt := unifiedSystemPrompt
+	if len(chat.Messages) > 0 {
+		systemPrompt += unifiedMessagesAddendum
+	}
+
+	var parsed unifiedResponse
+	if err := generateJSONWithRetry(ctx, s.llm, userMessage, systemPrompt, &parsed); err != nil {
+		return nil, nil, nil, fmt.Errorf("%w: unified: %w", ErrLLMResponse, err)
+	}
+	if parsed.Topics == nil {
+		return nil, nil, nil, fmt.Errorf("%w: unified: unexpected format", ErrLLMResponse)
+	}
+
+	topics := make([]model.Topic, 0, len(parsed.Topics))
+	topicMindcacheMap := make(map[string][]string)
+	for i, t := range parsed.Topics {
+		topic := model.Topic{
+			TopicID:    generateTopicID(i),
+			Title:      truncateRunes(t.Title, 40),
+			Brief:      composeBrief(t.Title, t.Brief),
+			SourceChat: chat.ChatID,
+		}
+		if len(chat.Messages) > 0 && indexMap != nil {
+			topic.MessageRefs, topic.SourceExcerpts = buildExcerpts(t.Messages, chat.Messages, indexMap)
+		}
+		topics = append(topics, topic)
+
+		if len(mindcaches) == 0 || len(t.Matches) == 0 {
+			continue
+		}
+		seen := make(map[string]bool, len(t.Matches))
+		ids := make([]string, 0, len(t.Matches))
+		for _, mcIdx := range t.Matches {
+			if mcIdx < 1 || mcIdx > len(mindcaches) {
+				continue
+			}
+			mcID := mindcaches[mcIdx-1].ID
+			if seen[mcID] {
+				continue
+			}
+			seen[mcID] = true
+			ids = append(ids, mcID)
+			if len(ids) == 3 {
+				break
+			}
+		}
+		if len(ids) > 0 {
+			topicMindcacheMap[topic.TopicID] = ids
+		}
+	}
+
+	return topics, topicMindcacheMap, matchedFromMap(mindcaches, topicMindcacheMap), nil
 }
 
 // parseLLMJSONInto unmarshals an LLM reply into out, tolerating markdown

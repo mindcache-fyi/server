@@ -38,7 +38,7 @@ func (m *scriptedLLM) IsConfigured() bool { return true }
 func (m *scriptedLLM) GetConfig() LLMConfig { return LLMConfig{} }
 
 func newTestAnalyseService(llm LLM, maxInputChars int) *AnalyseService {
-	return NewAnalyseService(nil, nil, llm, maxInputChars, nil, nil, 0, 0)
+	return NewAnalyseService(nil, nil, llm, maxInputChars, nil, nil, 0, 0, ModeStaged)
 }
 
 func testChat(content string) model.Chat {
@@ -474,7 +474,7 @@ func retrievalTestMindcaches() []model.Mindcache {
 }
 
 func newRetrievalService(llm LLM, emb *fakeEmbedder, blobs map[string][]byte, minCollection int) *AnalyseService {
-	return NewAnalyseService(nil, nil, llm, 0, emb, &fakeEmbedStore{blobs: blobs}, 2, minCollection)
+	return NewAnalyseService(nil, nil, llm, 0, emb, &fakeEmbedStore{blobs: blobs}, 2, minCollection, ModeStaged)
 }
 
 func retrievalTestBlobs(t *testing.T) map[string][]byte {
@@ -558,5 +558,152 @@ func TestMatchMindcaches_NoCandidatesSkipsLLM(t *testing.T) {
 	}
 	if llm.calls != 0 {
 		t.Errorf("llm calls = %d, want 0 when retrieval finds no candidates", llm.calls)
+	}
+}
+
+// fakeLister is a scripted MindcacheLister for unified-mode tests.
+type fakeLister struct {
+	mindcaches []model.Mindcache
+	err        error
+}
+
+func (f *fakeLister) List(context.Context) ([]model.Mindcache, error) {
+	return f.mindcaches, f.err
+}
+
+func newUnifiedService(llm LLM, lister *fakeLister) *AnalyseService {
+	return NewAnalyseService(nil, lister, llm, 0, nil, nil, 0, 0, ModeUnified)
+}
+
+func TestAnalyseUnified_MapsMatchesAndExcerpts(t *testing.T) {
+	llm := &scriptedLLM{replies: []string{
+		`{"topics":[{"title":"Docker networking","brief":"bridge vs host modes","messages":[1,2],"matches":[2]}]}`,
+	}}
+	lister := &fakeLister{mindcaches: retrievalTestMindcaches()}
+	svc := newUnifiedService(llm, lister)
+
+	chat := testChat("flat fallback content")
+	chat.Messages = testMessages() // 2 messages
+	topics, matches, matched, err := svc.analyseUnified(context.Background(), chat)
+	if err != nil {
+		t.Fatalf("analyseUnified: %v", err)
+	}
+	if len(topics) != 1 {
+		t.Fatalf("len(topics) = %d, want 1", len(topics))
+	}
+	topic := topics[0]
+	if topic.Title != "Docker networking" {
+		t.Errorf("Title = %q", topic.Title)
+	}
+	if want := "Docker networking: bridge vs host modes"; topic.Brief != want {
+		t.Errorf("Brief = %q, want %q", topic.Brief, want)
+	}
+	if len(topic.MessageRefs) != 2 || topic.MessageRefs[0] != 1 || topic.MessageRefs[1] != 2 {
+		t.Errorf("MessageRefs = %v, want [1 2]", topic.MessageRefs)
+	}
+	if got := matches[topic.TopicID]; len(got) != 1 || got[0] != "mc-2" {
+		t.Errorf("matches = %v, want [mc-2]", got)
+	}
+	if len(matched) != 1 || matched[0].ID != "mc-2" {
+		t.Errorf("matched = %v, want mc-2", matched)
+	}
+	if !strings.Contains(llm.lastUser, "MINDCACHES:") {
+		t.Errorf("prompt must contain the mindcache list: %q", llm.lastUser)
+	}
+}
+
+func TestAnalyseUnified_InvalidMatchIndicesDropped(t *testing.T) {
+	llm := &scriptedLLM{replies: []string{
+		`{"topics":[
+			{"title":"One","brief":"first topic","matches":[0,99,1,1,2,3]},
+			{"title":"Two","brief":"second topic","matches":[2]}
+		]}`,
+	}}
+	lister := &fakeLister{mindcaches: retrievalTestMindcaches()}
+	svc := newUnifiedService(llm, lister)
+
+	topics, matches, _, err := svc.analyseUnified(context.Background(), testChat("hello"))
+	if err != nil {
+		t.Fatalf("analyseUnified: %v", err)
+	}
+	if len(topics) != 2 {
+		t.Fatalf("len(topics) = %d, want 2", len(topics))
+	}
+	got := matches[topics[0].TopicID]
+	// 0 and 99 out of range, duplicate 1 dropped, capped at 3 -> [1 2 3]
+	if len(got) != 3 || got[0] != "mc-1" || got[1] != "mc-2" || got[2] != "mc-3" {
+		t.Errorf("matches[topic1] = %v, want [mc-1 mc-2 mc-3]", got)
+	}
+	if got := matches[topics[1].TopicID]; len(got) != 1 || got[0] != "mc-2" {
+		t.Errorf("matches[topic2] = %v, want [mc-2]", got)
+	}
+}
+
+func TestAnalyseUnified_EmptyCollection(t *testing.T) {
+	llm := &scriptedLLM{replies: []string{
+		`{"topics":[{"title":"Solo","brief":"only topic","matches":[1]}]}`,
+	}}
+	lister := &fakeLister{}
+	svc := newUnifiedService(llm, lister)
+
+	topics, matches, matched, err := svc.analyseUnified(context.Background(), testChat("hello"))
+	if err != nil {
+		t.Fatalf("analyseUnified: %v", err)
+	}
+	if len(topics) != 1 {
+		t.Fatalf("len(topics) = %d, want 1", len(topics))
+	}
+	if len(matches) != 0 {
+		t.Errorf("matches = %v, want empty for empty collection", matches)
+	}
+	if len(matched) != 0 {
+		t.Errorf("matched = %v, want empty", matched)
+	}
+	if strings.Contains(llm.lastUser, "MINDCACHES:") {
+		t.Errorf("prompt must omit the mindcache section for empty collections")
+	}
+}
+
+func TestAnalyseUnified_RetryOnInvalidJSON(t *testing.T) {
+	llm := &scriptedLLM{replies: []string{
+		"I cannot output JSON, sorry.",
+		`{"topics":[{"title":"Recovered","brief":"after retry"}]}`,
+	}}
+	svc := newUnifiedService(llm, &fakeLister{})
+
+	topics, _, _, err := svc.analyseUnified(context.Background(), testChat("hello"))
+	if err != nil {
+		t.Fatalf("analyseUnified: %v", err)
+	}
+	if len(topics) != 1 || topics[0].Title != "Recovered" {
+		t.Errorf("topics = %#v, want the recovered topic", topics)
+	}
+	if llm.calls != 2 {
+		t.Errorf("calls = %d, want 2", llm.calls)
+	}
+	if !strings.Contains(llm.lastUser, "not valid JSON") {
+		t.Errorf("retry message must mention the parse error")
+	}
+}
+
+func TestAnalyseUnified_FlatChatNoMessages(t *testing.T) {
+	llm := &scriptedLLM{replies: []string{
+		`{"topics":[{"title":"Flat","brief":"no structured messages","messages":[1]}]}`,
+	}}
+	svc := newUnifiedService(llm, &fakeLister{})
+
+	topics, _, _, err := svc.analyseUnified(context.Background(), testChat("hello"))
+	if err != nil {
+		t.Fatalf("analyseUnified: %v", err)
+	}
+	if len(topics) != 1 {
+		t.Fatalf("len(topics) = %d, want 1", len(topics))
+	}
+	if topics[0].MessageRefs != nil || topics[0].SourceExcerpts != nil {
+		t.Errorf("flat chat must carry no provenance, got refs=%v excerpts=%v",
+			topics[0].MessageRefs, topics[0].SourceExcerpts)
+	}
+	if strings.Contains(llm.lastSystem, `"messages": [i, ...]`) {
+		t.Error("system prompt must not include the messages addendum for flat chats")
 	}
 }

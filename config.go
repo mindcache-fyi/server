@@ -33,6 +33,10 @@ type Config struct {
 	// MinEmbedCollection is the collection size above which embedding
 	// retrieval is used (smaller collections match against the full list).
 	MinEmbedCollection int
+	// AnalyseMode selects the analysis pipeline: "staged" (default, two
+	// calls: extraction then matching) or "unified" (experimental, a single
+	// call producing topics with their matches).
+	AnalyseMode string
 
 	// PublicFS optionally overrides the on-disk public/ directory for
 	// static content served at the site root (e.g. an embedded SPA).
@@ -65,8 +69,9 @@ func LoadConfigFromEnv() (*Config, error) {
 		EmbedBaseURL:      getEnv("EMBED_BASE_URL", ""),
 		EmbedAPIKey:       getEnv("EMBED_API_KEY", ""),
 		EmbedModel:        getEnv("EMBED_MODEL", ""),
-		MatchCandidateK:   getEnvInt("MATCH_CANDIDATE_K", 5),
+		MatchCandidateK:    getEnvInt("MATCH_CANDIDATE_K", 5),
 		MinEmbedCollection: getEnvInt("EMBED_MIN_COLLECTION", 30),
+		AnalyseMode:        getEnv("ANALYSE_MODE", ""),
 	}
 
 	if c.IsDev() {
@@ -85,11 +90,25 @@ func LoadConfigFromEnv() (*Config, error) {
 		c.EmbedAPIKey = c.LLMAPIKey
 	}
 
+	if c.AnalyseMode == "" {
+		c.AnalyseMode = AnalyseModeStaged
+	}
+
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
+
+// Analysis pipeline modes.
+const (
+	// AnalyseModeStaged runs two sequential LLM calls: topic extraction,
+	// then matching against existing mindcaches. This is the default.
+	AnalyseModeStaged = "staged"
+	// AnalyseModeUnified runs a single LLM call that produces topics
+	// together with their mindcache matches. Experimental.
+	AnalyseModeUnified = "unified"
+)
 
 func (c *Config) validate() error {
 	if c.IsProd() {
@@ -103,6 +122,12 @@ func (c *Config) validate() error {
 
 	if c.LLMBaseURL != "" && !strings.HasPrefix(c.LLMBaseURL, "http://") && !strings.HasPrefix(c.LLMBaseURL, "https://") {
 		return fmt.Errorf("LLM_BASE_URL must start with http:// or https://")
+	}
+
+	switch c.AnalyseMode {
+	case "", AnalyseModeStaged, AnalyseModeUnified: // empty means staged
+	default:
+		return fmt.Errorf("ANALYSE_MODE must be %q or %q", AnalyseModeStaged, AnalyseModeUnified)
 	}
 
 	validSchemes := []string{"file://", "s3://", "gs://", "mem://"}

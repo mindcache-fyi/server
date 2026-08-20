@@ -75,7 +75,7 @@ func New(cfg *Config) (*App, error) {
 	// feature degrades to full-list matching without any extra conditionals.
 	embedder := service.NewEmbedder(cfg.EmbedBaseURL, cfg.EmbedAPIKey, cfg.EmbedModel, cfg.LLMMaxConcurrency)
 
-	analyseSvc := service.NewAnalyseService(kv, repo, llm, cfg.LLMMaxInputChars, embedder, repo, cfg.MatchCandidateK, cfg.MinEmbedCollection)
+	analyseSvc := service.NewAnalyseService(kv, repo, llm, cfg.LLMMaxInputChars, embedder, repo, cfg.MatchCandidateK, cfg.MinEmbedCollection, cfg.AnalyseMode)
 	mindcacheSvc := service.NewMindcacheService(repo, storage, llm, kv, cfg.LLMMaxInputChars, embedder)
 
 	if embedder != nil {

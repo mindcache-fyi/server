@@ -406,3 +406,71 @@ func TestEmbeddingMatchingEndToEnd(t *testing.T) {
 		t.Errorf("match prompt must not contain non-candidate B: %q", matchBody)
 	}
 }
+
+// TestAnalyseUnifiedEndToEnd verifies the single-call pipeline: one LLM call
+// per analyse produces topics with matches, and create/get still work.
+func TestAnalyseUnifiedEndToEnd(t *testing.T) {
+	llm := &mockLLMServer{replies: []string{
+		// analyse A — single unified call, empty collection
+		`{"topics":[{"title":"Alpha Net","brief":"alpha networking"}]}`,
+		// create A — markdown extraction
+		"# Alpha networking\n\nBridge details.",
+		// analyse B — single unified call, collection contains A
+		`{"topics":[{"title":"Alpha Again","brief":"alpha networking details","matches":[1]}]}`,
+	}}
+	llmSrv := httptest.NewServer(llm)
+	defer llmSrv.Close()
+
+	base := startTestApp(t, llmSrv.URL+"/v1", func(cfg *Config) {
+		cfg.AnalyseMode = AnalyseModeUnified
+	})
+
+	analyseA := postJSON(t, base+"/v1/api/analyse", `{
+		"chat": {"chatId":"chat-a","provider":"chatgpt",
+			"sourceUrl":"https://chatgpt.com/c/chat-a",
+			"title":"chat-a","content":"user: alpha networking\n\n-----\n\nassistant: bridges"}
+	}`)
+	topicA := analyseA["topics"].([]any)[0].(map[string]any)["topicId"].(string)
+	createA := postJSON(t, base+"/v1/api/create", `{"topicId":"`+topicA+`"}`)
+	if createA["success"] != true {
+		t.Fatalf("create failed: %#v", createA)
+	}
+	mcA := createA["mindcacheId"].(string)
+
+	analyseB := postJSON(t, base+"/v1/api/analyse", `{
+		"chat": {"chatId":"chat-b","provider":"chatgpt",
+			"sourceUrl":"https://chatgpt.com/c/chat-b",
+			"title":"chat-b","content":"user: more alpha details\n\n-----\n\nassistant: bridge internals"}
+	}`)
+	topicB := analyseB["topics"].([]any)[0].(map[string]any)["topicId"].(string)
+
+	// One unified call per analyse + one extraction for create = 3 calls.
+	llm.mu.Lock()
+	if llm.calls != 3 {
+		t.Errorf("llm calls = %d, want 3 (unified analyse is a single call)", llm.calls)
+	}
+	unifiedBody := llm.bodies[len(llm.bodies)-1]
+	llm.mu.Unlock()
+	if !strings.Contains(unifiedBody, "MINDCACHES") || !strings.Contains(unifiedBody, "alpha networking") {
+		t.Errorf("unified prompt must list the existing mindcache: %q", unifiedBody)
+	}
+
+	matches, ok := analyseB["topicMindcacheMap"].(map[string]any)
+	if !ok {
+		t.Fatalf("topicMindcacheMap = %#v", analyseB["topicMindcacheMap"])
+	}
+	got, ok := matches[topicB].([]any)
+	if !ok || len(got) != 1 || got[0].(string) != mcA {
+		t.Errorf("matches[%s] = %#v, want [%s]", topicB, matches[topicB], mcA)
+	}
+	mindcaches, ok := analyseB["mindcaches"].([]any)
+	if !ok || len(mindcaches) != 1 {
+		t.Errorf("mindcaches = %#v, want the single matched entry", analyseB["mindcaches"])
+	}
+
+	// Provenance path is mode-independent.
+	get := getJSON(t, base+"/v1/api/get/"+mcA)
+	if get["mainContent"] == "" {
+		t.Error("mainContent must be stored")
+	}
+}
