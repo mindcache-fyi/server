@@ -6,10 +6,12 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gocloud.dev/blob"
 
@@ -55,6 +57,16 @@ func (s *Storage) Read(ctx context.Context, key string) ([]byte, error) {
 // Exists reports whether an object exists under key.
 func (s *Storage) Exists(ctx context.Context, key string) (bool, error) {
 	return s.bucket.Exists(ctx, key)
+}
+
+// ModTime returns the modification time of the object stored under key.
+// Backends without real timestamps report their ingestion time.
+func (s *Storage) ModTime(ctx context.Context, key string) (time.Time, error) {
+	attrs, err := s.bucket.Attributes(ctx, key)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("object attributes %s: %w", key, err)
+	}
+	return attrs.ModTime, nil
 }
 
 // Delete removes the object stored under key.

@@ -134,6 +134,34 @@ definitions:
         description: Last update timestamp
         type: string
     type: object
+  model.SearchResponse:
+    properties:
+      results:
+        description: Ranked matches
+        items:
+          $ref: '#/definitions/model.SearchResult'
+        type: array
+    type: object
+  model.SearchResult:
+    properties:
+      matchedIn:
+        description: 'Which indexed fields matched: "brief", "content", or both'
+        items:
+          type: string
+        type: array
+      mindcache:
+        allOf:
+        - $ref: '#/definitions/model.Mindcache'
+        description: Matched mindcache metadata
+      score:
+        description: Relevance score; higher is better
+        type: number
+      snippet:
+        description: |-
+          Text window around the first content match; matches are wrapped in
+          \x01/\x02 marker characters for client-side highlighting
+        type: string
+    type: object
   model.SourceRecord:
     properties:
       capturedAt:
@@ -406,6 +434,32 @@ paths:
       summary: List all mindcaches
       tags:
       - mindcache
+  /v1/api/search:
+    get:
+      parameters:
+      - description: Query text
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Maximum number of results (default 20, max 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.SearchResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/model.ErrorResponse'
+      summary: Full-text search over briefs and content
+      tags:
+      - search
   /v1/api/update:
     post:
       consumes:

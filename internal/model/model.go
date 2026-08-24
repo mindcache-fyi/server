@@ -147,6 +147,25 @@ type ListResponse struct {
 	Mindcaches []Mindcache `json:"mindcaches"`
 }
 
+// SearchResult is one full-text match with its highlight snippet.
+type SearchResult struct {
+	// Matched mindcache metadata
+	Mindcache Mindcache `json:"mindcache"`
+	// Which indexed fields matched: "brief", "content", or both
+	MatchedIn []string `json:"matchedIn"`
+	// Text window around the first content match; matches are wrapped in
+	// \x01/\x02 marker characters for client-side highlighting
+	Snippet string `json:"snippet"`
+	// Relevance score; higher is better
+	Score float64 `json:"score"`
+}
+
+// SearchResponse is the response body for full-text search.
+type SearchResponse struct {
+	// Ranked matches
+	Results []SearchResult `json:"results"`
+}
+
 // GetResponse is the response body for getting a mindcache.
 type GetResponse struct {
 	Mindcache Mindcache `json:"mindcache"`
@@ -171,6 +190,9 @@ func MindcacheMainPath(id string) string {
 func MindcachePrefix(id string) string {
 	return "mindcache/" + id + "/"
 }
+
+// MindcacheRoot is the storage prefix containing every mindcache.
+const MindcacheRoot = "mindcache/"
 
 // MindcacheAssetPath returns the storage path for a mindcache asset.
 func MindcacheAssetPath(id, filename string) string {

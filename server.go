@@ -76,15 +76,22 @@ func New(cfg *Config) (*App, error) {
 	embedder := service.NewEmbedder(cfg.EmbedBaseURL, cfg.EmbedAPIKey, cfg.EmbedModel, cfg.LLMMaxConcurrency)
 
 	analyseSvc := service.NewAnalyseService(kv, repo, llm, cfg.LLMMaxInputChars, embedder, repo, cfg.MatchCandidateK, cfg.MinEmbedCollection, cfg.AnalyseMode)
-	mindcacheSvc := service.NewMindcacheService(repo, storage, llm, kv, cfg.LLMMaxInputChars, embedder)
+
+	searchRepo := store.NewSearchRepo(db)
+	searchSvc := service.NewSearchIndexService(repo, searchRepo, storage)
+	mindcacheSvc := service.NewMindcacheService(repo, storage, llm, kv, cfg.LLMMaxInputChars, embedder, searchSvc)
 
 	if embedder != nil {
 		go service.BackfillEmbeddings(context.Background(), repo, embedder)
 	}
+	// Bring the full-text index up to date with the blob content in the
+	// background; write-through hooks keep it fresh afterwards.
+	go searchSvc.Reconcile(context.Background())
 
 	healthH := handler.NewHealthHandler(db, storage, llm)
 	analyseH := handler.NewAnalyseHandler(analyseSvc)
 	mindcacheH := handler.NewMindcacheHandler(mindcacheSvc)
+	searchH := handler.NewSearchHandler(searchSvc)
 	debugH := handler.NewDebugHandler(llm, kv)
 
 	r := chi.NewRouter()
@@ -109,6 +116,7 @@ func New(cfg *Config) (*App, error) {
 		r.Post("/analyse/clear", analyseH.ClearAnalyse)
 		r.Get("/list", mindcacheH.List)
 		r.Get("/get/{id}", mindcacheH.Get)
+		r.Get("/search", searchH.Search)
 		r.Post("/create", mindcacheH.Create)
 		r.Post("/update", mindcacheH.Update)
 		r.Delete("/delete/{id}", mindcacheH.Delete)

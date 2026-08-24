@@ -48,12 +48,14 @@ type MindcacheService struct {
 	updateDedup   *dedup.Deduplicator[bool]
 	maxInputChars int
 	embedder      EmbeddingsProvider
+	searchIdx     *SearchIndexService
 }
 
 // NewMindcacheService creates a MindcacheService. maxInputChars caps the
 // conversation text sent to the LLM per call; values <= 0 disable the cap.
-// embedder may be nil — briefs are then never embedded.
-func NewMindcacheService(repo *store.MindcacheRepo, storage *Storage, llm LLM, kv *cache.KVCache, maxInputChars int, embedder EmbeddingsProvider) *MindcacheService {
+// embedder and searchIdx may be nil — briefs are then never embedded, and
+// content is never full-text indexed.
+func NewMindcacheService(repo *store.MindcacheRepo, storage *Storage, llm LLM, kv *cache.KVCache, maxInputChars int, embedder EmbeddingsProvider, searchIdx *SearchIndexService) *MindcacheService {
 	return &MindcacheService{
 		repo:          repo,
 		storage:       storage,
@@ -63,6 +65,7 @@ func NewMindcacheService(repo *store.MindcacheRepo, storage *Storage, llm LLM, k
 		updateDedup:   dedup.NewDeduplicator[bool](30 * time.Minute),
 		maxInputChars: maxInputChars,
 		embedder:      embedder,
+		searchIdx:     searchIdx,
 	}
 }
 
@@ -141,6 +144,8 @@ func (s *MindcacheService) doCreateFromTopic(ctx context.Context, topicId string
 	if err := s.storage.Write(ctx, model.MindcacheMainPath(mc.ID), []byte(mainContent)); err != nil {
 		return model.Mindcache{}, err
 	}
+
+	s.indexMindcache(ctx, mc.ID)
 
 	embedBrief(ctx, s.embedder, s.repo, mc.ID, mc.Brief)
 
@@ -226,6 +231,8 @@ func (s *MindcacheService) doUpdate(ctx context.Context, mindcacheId, topicId st
 		return false, err
 	}
 
+	s.indexMindcache(ctx, mindcacheId)
+
 	embedBrief(ctx, s.embedder, s.repo, mindcacheId, integrated.Brief)
 
 	appendSourceRecord(ctx, s.storage, mindcacheId, sourceRecordFromTopic(chat, topic))
@@ -293,7 +300,22 @@ func (s *MindcacheService) Delete(ctx context.Context, id string) (bool, error) 
 		return false, err
 	}
 	_ = s.storage.DeleteDir(ctx, model.MindcachePrefix(id))
+	if s.searchIdx != nil {
+		s.searchIdx.RemoveFromIndex(ctx, id)
+	}
 	return true, nil
+}
+
+// indexMindcache refreshes the full-text index entry of a mindcache after a
+// content write. Failures are logged, never fatal — the startup reconcile
+// repairs any drift.
+func (s *MindcacheService) indexMindcache(ctx context.Context, id string) {
+	if s.searchIdx == nil {
+		return
+	}
+	if err := s.searchIdx.IndexMindcache(ctx, id); err != nil {
+		slog.Warn("search index update failed", "mindcache", id, "error", err)
+	}
 }
 
 func (s *MindcacheService) extractTopicContent(ctx context.Context, topic string, chat model.Chat) (string, error) {

@@ -298,6 +298,46 @@ const docTemplate = `{
                 }
             }
         },
+        "/v1/api/search": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "search"
+                ],
+                "summary": "Full-text search over briefs and content",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Query text",
+                        "name": "q",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum number of results (default 20, max 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.SearchResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/api/update": {
             "post": {
                 "consumes": [
@@ -521,6 +561,46 @@ const docTemplate = `{
                 },
                 "updatedAt": {
                     "description": "Last update timestamp",
+                    "type": "string"
+                }
+            }
+        },
+        "model.SearchResponse": {
+            "type": "object",
+            "properties": {
+                "results": {
+                    "description": "Ranked matches",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.SearchResult"
+                    }
+                }
+            }
+        },
+        "model.SearchResult": {
+            "type": "object",
+            "properties": {
+                "matchedIn": {
+                    "description": "Which indexed fields matched: \"brief\", \"content\", or both",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "mindcache": {
+                    "description": "Matched mindcache metadata",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Mindcache"
+                        }
+                    ]
+                },
+                "score": {
+                    "description": "Relevance score; higher is better",
+                    "type": "number"
+                },
+                "snippet": {
+                    "description": "Text window around the first content match; matches are wrapped in\n\\x01/\\x02 marker characters for client-side highlighting",
                     "type": "string"
                 }
             }
