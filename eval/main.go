@@ -57,7 +57,7 @@ func (c *countingLLM) Generate(ctx context.Context, userMessage, systemPrompt st
 	return c.inner.Generate(ctx, userMessage, systemPrompt)
 }
 
-func (c *countingLLM) IsConfigured() bool      { return c.inner.IsConfigured() }
+func (c *countingLLM) IsConfigured() bool           { return c.inner.IsConfigured() }
 func (c *countingLLM) GetConfig() service.LLMConfig { return c.inner.GetConfig() }
 
 type runResult struct {
@@ -79,7 +79,7 @@ func main() {
 	apiKey := os.Getenv("EVAL_API_KEY")
 	llmModel := os.Getenv("EVAL_MODEL")
 	if baseURL == "" || llmModel == "" {
-		fmt.Fprintln(os.Stderr, "EVAL_BASE_URL and EVAL_MODEL are required (EVAL_API_KEY optional)")
+		_, _ = fmt.Fprintln(os.Stderr, "EVAL_BASE_URL and EVAL_MODEL are required (EVAL_API_KEY optional)")
 		os.Exit(2)
 	}
 
@@ -99,7 +99,7 @@ func main() {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	fmt.Fprintf(w, "FIXTURE\tMODE\tRUN\tRESULT\tCALLS\tTIME\tMATCH\n")
+	_, _ = fmt.Fprintf(w, "FIXTURE\tMODE\tRUN\tRESULT\tCALLS\tTIME\tMATCH\n")
 
 	sums := make(map[string]*modeSummary)
 
@@ -117,10 +117,10 @@ func main() {
 				if res.expected == 0 {
 					match = "-"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%s\t%s\n",
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%s\t%s\n",
 					fx.Name, mode, run, result, res.calls, res.elapsed.Round(time.Millisecond), match)
 				if res.err != nil {
-					fmt.Fprintf(w, "\t\t\terr: %v\t\t\t\n", res.err)
+					_, _ = fmt.Fprintf(w, "\t\t\terr: %v\t\t\t\n", res.err)
 				}
 			}
 		}
@@ -129,7 +129,7 @@ func main() {
 
 	fmt.Println("\nSummary (per fixture/mode):")
 	sw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
-	fmt.Fprintf(sw, "FIXTURE\tMODE\tSUCCESS\tAVG CALLS\tAVG TIME\tMATCH RATE\n")
+	_, _ = fmt.Fprintf(sw, "FIXTURE\tMODE\tSUCCESS\tAVG CALLS\tAVG TIME\tMATCH RATE\n")
 	keys := make([]string, 0, len(sums))
 	for k := range sums {
 		keys = append(keys, k)
@@ -137,7 +137,7 @@ func main() {
 	sort.Strings(keys)
 	for _, k := range keys {
 		s := sums[k]
-		fmt.Fprintf(sw, "%s\t%s\t%d/%d\t%.2f\t%s\t%.0f%%\n",
+		_, _ = fmt.Fprintf(sw, "%s\t%s\t%d/%d\t%.2f\t%s\t%.0f%%\n",
 			s.fixture, s.mode, s.ok, s.runs,
 			float64(s.calls)/float64(s.runs),
 			(s.totalElapsed / time.Duration(s.runs)).Round(time.Millisecond),
@@ -182,13 +182,13 @@ func evalOnce(fx fixture, mode string, llm service.LLM) runResult {
 	if err != nil {
 		return runResult{err: err}
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	db, err := store.OpenSQLite(filepath.Join(tmpDir, "eval.db"))
 	if err != nil {
 		return runResult{err: err}
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if err := store.RunMigrations(db); err != nil {
 		return runResult{err: err}
 	}
@@ -314,6 +314,6 @@ func loadFixtures(dir string) []fixture {
 }
 
 func fatalf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+	_, _ = fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
 }

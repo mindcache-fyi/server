@@ -33,8 +33,6 @@ func (m *fakeEmbeddingModel) DoEmbed(_ context.Context, values []string, _ provi
 	return &provider.EmbedResult{Embeddings: m.nextVectors(values)}, nil
 }
 
-func vec64(vals ...float64) []float64 { return vals }
-
 func TestEmbedder_ChunksBatchesAndConverts(t *testing.T) {
 	fake := &fakeEmbeddingModel{
 		dims:       2,
