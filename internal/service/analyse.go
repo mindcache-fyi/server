@@ -31,14 +31,6 @@ Rules:
 Respond with a JSON object in exactly this format:
 { "topics": [ { "title": "...", "brief": "..." } ] }`
 
-// extractTopicsMessagesAddendum extends the extraction prompt when the chat
-// carries structured messages.
-const extractTopicsMessagesAddendum = `
-The conversation is given as numbered messages: [i] role: text. For each topic, also list in "messages" the numbers of all messages that support it — at most 10, and only numbers that appear in the conversation.
-
-The JSON format becomes:
-{ "topics": [ { "title": "...", "brief": "...", "messages": [i, ...] } ] }`
-
 const matchMindcachesSystemPrompt = `You are a relevance matching specialist. You receive a numbered list of new topics and a numbered list of existing mindcaches (knowledge notes). For each topic, pick the 0-3 most relevant mindcaches.
 
 Relevance means the same subject: a reader would expect to find both in the same note. Judge by meaning, not by shared wording, and match across languages when the subjects are the same.
@@ -66,14 +58,6 @@ Rules:
 
 Respond with a JSON object in exactly this format:
 { "topics": [ { "title": "...", "brief": "...", "matches": [<mindcache number>, ...] } ] }`
-
-// unifiedMessagesAddendum extends the unified prompt when the chat carries
-// structured messages.
-const unifiedMessagesAddendum = `
-The conversation is given as numbered messages: [i] role: text. For each topic, also list the numbers of all messages that support it in "messages" — at most 10, and only numbers that appear in the conversation.
-
-The JSON format becomes:
-{ "topics": [ { "title": "...", "brief": "...", "messages": [i, ...], "matches": [<mindcache number>, ...] } ] }`
 
 // AnalyseResult holds the output of analysing a chat.
 type AnalyseResult struct {
@@ -252,9 +236,8 @@ func matchedFromMap(mindcaches []model.Mindcache, topicMindcacheMap map[string][
 
 type topicsResponse struct {
 	Topics []struct {
-		Title    string `json:"title"`
-		Brief    string `json:"brief"`
-		Messages []int  `json:"messages"`
+		Title string `json:"title"`
+		Brief string `json:"brief"`
 	} `json:"topics"`
 }
 
@@ -263,16 +246,11 @@ func (s *AnalyseService) extractTopics(ctx context.Context, chat model.Chat) ([]
 	if title == "" {
 		title = "(untitled)"
 	}
-	conversation, indexMap := formatConversation(chat, s.maxInputChars)
-	userMessage := fmt.Sprintf("Title: %s\n\nConversation:\n%s", title, conversation)
-
-	systemPrompt := extractTopicsSystemPrompt
-	if len(chat.Messages) > 0 {
-		systemPrompt += extractTopicsMessagesAddendum
-	}
+	content := truncateConversation(chat.Content, s.maxInputChars)
+	userMessage := fmt.Sprintf("Title: %s\n\nConversation:\n%s", title, content)
 
 	var parsed topicsResponse
-	if err := generateJSONWithRetry(ctx, s.llm, userMessage, systemPrompt, &parsed); err != nil {
+	if err := generateJSONWithRetry(ctx, s.llm, userMessage, extractTopicsSystemPrompt, &parsed); err != nil {
 		return nil, fmt.Errorf("%w: topics: %w", ErrLLMResponse, err)
 	}
 	if parsed.Topics == nil {
@@ -281,168 +259,14 @@ func (s *AnalyseService) extractTopics(ctx context.Context, chat model.Chat) ([]
 
 	topics := make([]model.Topic, 0, len(parsed.Topics))
 	for i, t := range parsed.Topics {
-		topic := model.Topic{
+		topics = append(topics, model.Topic{
 			TopicID:    generateTopicID(i),
 			Title:      truncateRunes(t.Title, 40),
 			Brief:      composeBrief(t.Title, t.Brief),
 			SourceChat: chat.ChatID,
-		}
-		if len(chat.Messages) > 0 && indexMap != nil {
-			topic.MessageRefs, topic.SourceExcerpts = buildExcerpts(t.Messages, chat.Messages, indexMap)
-		}
-		topics = append(topics, topic)
+		})
 	}
 	return topics, nil
-}
-
-// formatConversation renders the conversation for the extraction prompt.
-// Structured messages become numbered "[i] role: text" lines and the second
-// return value maps each rendered line number to its 1-based original
-// message index (0 for synthetic lines). Flat content is used as-is with a
-// nil map. Input is capped at maxRunes runes.
-func formatConversation(chat model.Chat, maxRunes int) (string, []int) {
-	if len(chat.Messages) == 0 {
-		return truncateConversation(chat.Content, maxRunes), nil
-	}
-	msgs, indexMap := truncateMessages(chat.Messages, maxRunes)
-	var b strings.Builder
-	for i, m := range msgs {
-		line := m.Content
-		if m.Role != "" {
-			line = m.Role + ": " + m.Content
-		}
-		fmt.Fprintf(&b, "[%d] %s", i+1, line)
-		if i < len(msgs)-1 {
-			b.WriteString("\n\n")
-		}
-	}
-	return b.String(), indexMap
-}
-
-// messageCost estimates the rendered size of a numbered message line in runes.
-func messageCost(m model.Message) int {
-	return len([]rune(m.Content)) + len([]rune(m.Role)) + 8
-}
-
-// truncateMessages keeps the head and tail messages intact and inserts a
-// marker message when the total text exceeds maxRunes runes. It returns the
-// rendered messages plus the 1-based original index of each (0 for the
-// marker). maxRunes <= 0 disables truncation.
-func truncateMessages(msgs []model.Message, maxRunes int) ([]model.Message, []int) {
-	if maxRunes <= 0 || len(msgs) == 0 {
-		indexMap := make([]int, len(msgs))
-		for i := range msgs {
-			indexMap[i] = i + 1
-		}
-		return msgs, indexMap
-	}
-
-	total := 0
-	for _, m := range msgs {
-		total += messageCost(m)
-	}
-	if total <= maxRunes {
-		indexMap := make([]int, len(msgs))
-		for i := range msgs {
-			indexMap[i] = i + 1
-		}
-		return msgs, indexMap
-	}
-
-	headBudget := maxRunes * 2 / 3
-	tailBudget := maxRunes - headBudget
-
-	headIdxs := make([]int, 0, len(msgs))
-	forcedFirst := false
-	used := 0
-	i := 0
-	for ; i < len(msgs); i++ {
-		cost := messageCost(msgs[i])
-		if used+cost > headBudget {
-			if len(headIdxs) == 0 {
-				// Always keep at least the first message, trimmed to budget.
-				headIdxs = append(headIdxs, i+1)
-				forcedFirst = true
-				i++
-			}
-			break
-		}
-		headIdxs = append(headIdxs, i+1)
-		used += cost
-	}
-
-	tailIdxs := []int{}
-	used = 0
-	for j := len(msgs) - 1; j >= i; j-- {
-		cost := messageCost(msgs[j])
-		if used+cost > tailBudget {
-			break
-		}
-		tailIdxs = append([]int{j + 1}, tailIdxs...)
-		used += cost
-	}
-
-	if i >= len(msgs) || len(headIdxs)+len(tailIdxs) >= len(msgs) {
-		// Head and tail already cover every message.
-		all := append(headIdxs, tailIdxs...)
-		out := make([]model.Message, len(all))
-		for k, idx := range all {
-			out[k] = msgs[idx-1]
-		}
-		return out, all
-	}
-
-	out := make([]model.Message, 0, len(headIdxs)+len(tailIdxs)+1)
-	indexMap := make([]int, 0, len(headIdxs)+len(tailIdxs)+1)
-	for _, idx := range headIdxs {
-		m := msgs[idx-1]
-		if forcedFirst && idx == headIdxs[0] {
-			m.Content = truncateRunes(m.Content, headBudget)
-		}
-		out = append(out, m)
-		indexMap = append(indexMap, idx)
-	}
-	out = append(out, model.Message{Content: "[... middle of conversation truncated ...]"})
-	indexMap = append(indexMap, 0)
-	for _, idx := range tailIdxs {
-		out = append(out, msgs[idx-1])
-		indexMap = append(indexMap, idx)
-	}
-	return out, indexMap
-}
-
-// buildExcerpts validates LLM-reported message indices against the rendered
-// index map and turns the referenced messages into "[role] content"
-// excerpts. Invalid, synthetic, and duplicate indices are dropped; at most
-// 10 excerpts are kept.
-func buildExcerpts(reported []int, msgs []model.Message, indexMap []int) ([]int, []string) {
-	seen := make(map[int]bool, len(reported))
-	refs := make([]int, 0, len(reported))
-	excerpts := make([]string, 0, len(reported))
-	for _, idx := range reported {
-		if idx < 1 || idx > len(indexMap) {
-			continue
-		}
-		orig := indexMap[idx-1]
-		if orig == 0 || orig > len(msgs) || seen[orig] {
-			continue
-		}
-		seen[orig] = true
-		refs = append(refs, orig)
-		excerpts = append(excerpts, messageExcerpt(msgs[orig-1]))
-		if len(refs) == 10 {
-			break
-		}
-	}
-	return refs, excerpts
-}
-
-func messageExcerpt(m model.Message) string {
-	text := truncateRunes(m.Content, 1500)
-	if m.Role == "" {
-		return text
-	}
-	return m.Role + ": " + text
 }
 
 type matchesResponse struct {
@@ -569,10 +393,9 @@ func (s *AnalyseService) retrieveCandidates(ctx context.Context, topics []model.
 
 type unifiedResponse struct {
 	Topics []struct {
-		Title    string `json:"title"`
-		Brief    string `json:"brief"`
-		Messages []int  `json:"messages"`
-		Matches  []int  `json:"matches"`
+		Title   string `json:"title"`
+		Brief   string `json:"brief"`
+		Matches []int  `json:"matches"`
 	} `json:"topics"`
 }
 
@@ -590,8 +413,8 @@ func (s *AnalyseService) analyseUnified(ctx context.Context, chat model.Chat) ([
 	if title == "" {
 		title = "(untitled)"
 	}
-	conversation, indexMap := formatConversation(chat, s.maxInputChars)
-	userMessage := fmt.Sprintf("Title: %s\n\nConversation:\n%s", title, conversation)
+	content := truncateConversation(chat.Content, s.maxInputChars)
+	userMessage := fmt.Sprintf("Title: %s\n\nConversation:\n%s", title, content)
 	if len(mindcaches) > 0 {
 		mcLines := make([]string, 0, len(mindcaches))
 		for i, mc := range mindcaches {
@@ -600,13 +423,8 @@ func (s *AnalyseService) analyseUnified(ctx context.Context, chat model.Chat) ([
 		userMessage += "\n\nMINDCACHES:\n" + strings.Join(mcLines, "\n")
 	}
 
-	systemPrompt := unifiedSystemPrompt
-	if len(chat.Messages) > 0 {
-		systemPrompt += unifiedMessagesAddendum
-	}
-
 	var parsed unifiedResponse
-	if err := generateJSONWithRetry(ctx, s.llm, userMessage, systemPrompt, &parsed); err != nil {
+	if err := generateJSONWithRetry(ctx, s.llm, userMessage, unifiedSystemPrompt, &parsed); err != nil {
 		return nil, nil, nil, fmt.Errorf("%w: unified: %w", ErrLLMResponse, err)
 	}
 	if parsed.Topics == nil {
@@ -621,9 +439,6 @@ func (s *AnalyseService) analyseUnified(ctx context.Context, chat model.Chat) ([
 			Title:      truncateRunes(t.Title, 40),
 			Brief:      composeBrief(t.Title, t.Brief),
 			SourceChat: chat.ChatID,
-		}
-		if len(chat.Messages) > 0 && indexMap != nil {
-			topic.MessageRefs, topic.SourceExcerpts = buildExcerpts(t.Messages, chat.Messages, indexMap)
 		}
 		topics = append(topics, topic)
 

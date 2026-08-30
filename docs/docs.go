@@ -426,13 +426,6 @@ const docTemplate = `{
                     "description": "Full chat content as plain text",
                     "type": "string"
                 },
-                "messages": {
-                    "description": "Structured messages; optional, keeps backward compatibility with flat\ncontent when absent.",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/model.Message"
-                    }
-                },
                 "provider": {
                     "description": "Provider enum: gemini, claude, deepseek, yuanbao, chatgpt",
                     "type": "string",
@@ -506,13 +499,6 @@ const docTemplate = `{
                 },
                 "mindcache": {
                     "$ref": "#/definitions/model.Mindcache"
-                },
-                "sources": {
-                    "description": "Provenance records, one per capture that fed this mindcache",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/model.SourceRecord"
-                    }
                 }
             }
         },
@@ -525,19 +511,6 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/model.Mindcache"
                     }
-                }
-            }
-        },
-        "model.Message": {
-            "type": "object",
-            "properties": {
-                "content": {
-                    "description": "Message text",
-                    "type": "string"
-                },
-                "role": {
-                    "description": "Message role: user, assistant, or other",
-                    "type": "string"
                 }
             }
         },
@@ -605,38 +578,6 @@ const docTemplate = `{
                 }
             }
         },
-        "model.SourceRecord": {
-            "type": "object",
-            "properties": {
-                "capturedAt": {
-                    "description": "When the record was added",
-                    "type": "string"
-                },
-                "chatId": {
-                    "description": "Source chat identifier",
-                    "type": "string"
-                },
-                "excerpts": {
-                    "description": "Excerpts of the messages backing the topic",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "sourceUrl": {
-                    "description": "Source conversation URL",
-                    "type": "string"
-                },
-                "topicBrief": {
-                    "description": "Topic brief that was cached",
-                    "type": "string"
-                },
-                "topicTitle": {
-                    "description": "Topic title that was cached",
-                    "type": "string"
-                }
-            }
-        },
         "model.Topic": {
             "type": "object",
             "properties": {
@@ -644,23 +585,9 @@ const docTemplate = `{
                     "description": "Brief summary of the topic",
                     "type": "string"
                 },
-                "messageRefs": {
-                    "description": "MessageRefs are 1-based indices into Chat.Messages supporting this\ntopic. Empty when the chat was captured without structured messages.",
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
-                },
                 "sourceChat": {
                     "description": "Source chat ID this topic was extracted from",
                     "type": "string"
-                },
-                "sourceExcerpts": {
-                    "description": "SourceExcerpts are the referenced messages in \"[role] content\" form,\naligned with MessageRefs.",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
                 },
                 "title": {
                     "description": "Short topic title",

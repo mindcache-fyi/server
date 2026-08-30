@@ -39,9 +39,25 @@ type expectedMatch struct {
 	Briefs []string `json:"briefs"`
 }
 
+type fixtureMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// fixtureChat mirrors the on-disk chat shape. Fixtures may carry structured
+// messages instead of flat content; the runner flattens them before analysis.
+type fixtureChat struct {
+	ChatID    string           `json:"chatId"`
+	Provider  string           `json:"provider"`
+	SourceURL string           `json:"sourceUrl"`
+	Title     string           `json:"title"`
+	Content   string           `json:"content"`
+	Messages  []fixtureMessage `json:"messages"`
+}
+
 type fixture struct {
 	Name       string          `json:"name"`
-	Chat       model.Chat      `json:"chat"`
+	Chat       fixtureChat     `json:"chat"`
 	Collection []string        `json:"collection"`
 	Expected   []expectedMatch `json:"expected"`
 }
@@ -207,9 +223,15 @@ func evalOnce(fx fixture, mode string, llm service.LLM) runResult {
 	defer kv.Stop()
 	svc := service.NewAnalyseService(kv, repo, counter, 100000, nil, nil, 0, 0, mode)
 
-	chat := fx.Chat
-	if chat.Content == "" && len(chat.Messages) > 0 {
-		chat.Content = flattenMessages(chat.Messages)
+	chat := model.Chat{
+		ChatID:    fx.Chat.ChatID,
+		Provider:  fx.Chat.Provider,
+		SourceURL: fx.Chat.SourceURL,
+		Title:     fx.Chat.Title,
+		Content:   fx.Chat.Content,
+	}
+	if chat.Content == "" && len(fx.Chat.Messages) > 0 {
+		chat.Content = flattenMessages(fx.Chat.Messages)
 	}
 	if chat.ChatID == "" {
 		chat.ChatID = "eval-" + fx.Name
@@ -274,7 +296,7 @@ func findTopic(topics []model.Topic, contains string) *model.Topic {
 	return nil
 }
 
-func flattenMessages(messages []model.Message) string {
+func flattenMessages(messages []fixtureMessage) string {
 	parts := make([]string, 0, len(messages))
 	for _, m := range messages {
 		if m.Role == "" || m.Role == "other" {

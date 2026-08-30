@@ -149,8 +149,6 @@ func (s *MindcacheService) doCreateFromTopic(ctx context.Context, topicId string
 
 	embedBrief(ctx, s.embedder, s.repo, mc.ID, mc.Brief)
 
-	appendSourceRecord(ctx, s.storage, mc.ID, sourceRecordFromTopic(chat, topic))
-
 	return *mc, nil
 }
 
@@ -235,54 +233,7 @@ func (s *MindcacheService) doUpdate(ctx context.Context, mindcacheId, topicId st
 
 	embedBrief(ctx, s.embedder, s.repo, mindcacheId, integrated.Brief)
 
-	appendSourceRecord(ctx, s.storage, mindcacheId, sourceRecordFromTopic(chat, topic))
-
 	return true, nil
-}
-
-func sourceRecordFromTopic(chat model.Chat, topic model.Topic) model.SourceRecord {
-	return model.SourceRecord{
-		ChatID:     chat.ChatID,
-		SourceURL:  chat.SourceURL,
-		TopicTitle: topic.Title,
-		TopicBrief: topic.Brief,
-		Excerpts:   topic.SourceExcerpts,
-		CapturedAt: time.Now().UTC(),
-	}
-}
-
-// appendSourceRecord adds a provenance record to the mindcache's
-// sources.json. Failures are logged, never fatal — provenance must not
-// block knowledge saving.
-func appendSourceRecord(ctx context.Context, storage *Storage, mindcacheID string, record model.SourceRecord) {
-	path := model.MindcacheSourcesPath(mindcacheID)
-	var records []model.SourceRecord
-	if data, err := storage.Read(ctx, path); err == nil {
-		_ = json.Unmarshal(data, &records)
-	}
-	records = append(records, record)
-	data, err := json.Marshal(records)
-	if err != nil {
-		slog.Warn("marshal sources failed", "mindcache", mindcacheID, "error", err)
-		return
-	}
-	if err := storage.Write(ctx, path, data); err != nil {
-		slog.Warn("write sources failed", "mindcache", mindcacheID, "error", err)
-	}
-}
-
-// Sources returns the provenance records of a mindcache, or nil when there
-// are none (or the file is unreadable).
-func (s *MindcacheService) Sources(ctx context.Context, mindcacheID string) []model.SourceRecord {
-	data, err := s.storage.Read(ctx, model.MindcacheSourcesPath(mindcacheID))
-	if err != nil {
-		return nil
-	}
-	var records []model.SourceRecord
-	if err := json.Unmarshal(data, &records); err != nil {
-		return nil
-	}
-	return records
 }
 
 // Delete removes a mindcache and its stored content. It returns false when the

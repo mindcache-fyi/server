@@ -169,81 +169,9 @@ func getJSON(t *testing.T, url string) map[string]any {
 	return out
 }
 
-// TestAnalyseAndCreateWithProvenance exercises the v2 payload end to end:
-// structured messages -> analyse (topic refs + excerpts) -> create ->
-// get (sources.json provenance).
-func TestAnalyseAndCreateWithProvenance(t *testing.T) {
-	topicsReply := `{"topics":[{"title":"Docker networking","brief":"bridge vs host modes","messages":[1,2]}]}`
-	extractReply := "## Docker networking\n\nBridge mode isolates containers."
-	mock := &mockLLMServer{replies: []string{topicsReply, extractReply}}
-	llmSrv := httptest.NewServer(mock)
-	defer llmSrv.Close()
-
-	base := startTestApp(t, llmSrv.URL+"/v1")
-
-	analyseBody := `{
-		"chat": {
-			"chatId": "chat-x",
-			"provider": "chatgpt",
-			"sourceUrl": "https://chatgpt.com/c/1",
-			"title": "Docker chat",
-			"content": "user: How does Docker networking work?\n\n-----\n\nassistant: Bridge mode isolates containers.",
-			"messages": [
-				{"role": "user", "content": "How does Docker networking work?"},
-				{"role": "assistant", "content": "Bridge mode isolates containers."}
-			]
-		}
-	}`
-	analyse := postJSON(t, base+"/v1/api/analyse", analyseBody)
-
-	topics, ok := analyse["topics"].([]any)
-	if !ok || len(topics) != 1 {
-		t.Fatalf("topics = %#v, want 1 topic", analyse["topics"])
-	}
-	topic := topics[0].(map[string]any)
-	topicID := topic["topicId"].(string)
-	refs, ok := topic["messageRefs"].([]any)
-	if !ok || len(refs) != 2 {
-		t.Fatalf("messageRefs = %#v, want [1 2]", topic["messageRefs"])
-	}
-	if refs[0].(float64) != 1 || refs[1].(float64) != 2 {
-		t.Errorf("messageRefs = %v, want [1 2]", refs)
-	}
-	excerpts, ok := topic["sourceExcerpts"].([]any)
-	if !ok || len(excerpts) != 2 {
-		t.Fatalf("sourceExcerpts = %#v, want 2 entries", topic["sourceExcerpts"])
-	}
-	if excerpts[0].(string) != "user: How does Docker networking work?" {
-		t.Errorf("excerpts[0] = %q", excerpts[0].(string))
-	}
-
-	create := postJSON(t, base+"/v1/api/create", `{"topicId":"`+topicID+`"}`)
-	if create["success"] != true {
-		t.Fatalf("create failed: %#v", create)
-	}
-	mcID := create["mindcacheId"].(string)
-
-	got := getJSON(t, base+"/v1/api/get/"+mcID)
-	sources, ok := got["sources"].([]any)
-	if !ok || len(sources) != 1 {
-		t.Fatalf("sources = %#v, want exactly one record", got["sources"])
-	}
-	rec := sources[0].(map[string]any)
-	if rec["chatId"] != "chat-x" || rec["sourceUrl"] != "https://chatgpt.com/c/1" {
-		t.Errorf("source record identity wrong: %#v", rec)
-	}
-	if rec["topicTitle"] != "Docker networking" {
-		t.Errorf("topicTitle = %#v", rec["topicTitle"])
-	}
-	recExcerpts, ok := rec["excerpts"].([]any)
-	if !ok || len(recExcerpts) != 2 {
-		t.Errorf("record excerpts = %#v, want 2 entries", rec["excerpts"])
-	}
-}
-
-// TestAnalyseLegacyFlatContent keeps the old payload working: no messages,
-// no provenance fields.
-func TestAnalyseLegacyFlatContent(t *testing.T) {
+// TestAnalyseFlatContent verifies the analyse endpoint returns extracted
+// topics for a flat chat payload.
+func TestAnalyseFlatContent(t *testing.T) {
 	topicsReply := `{"topics":[{"title":"SQLite WAL","brief":"write-ahead logging trade-offs"}]}`
 	mock := &mockLLMServer{replies: []string{topicsReply}}
 	llmSrv := httptest.NewServer(mock)
@@ -267,11 +195,8 @@ func TestAnalyseLegacyFlatContent(t *testing.T) {
 		t.Fatalf("topics = %#v, want 1 topic", analyse["topics"])
 	}
 	topic := topics[0].(map[string]any)
-	if _, present := topic["messageRefs"]; present {
-		t.Errorf("legacy analyse must omit messageRefs, got %#v", topic["messageRefs"])
-	}
-	if _, present := topic["sourceExcerpts"]; present {
-		t.Errorf("legacy analyse must omit sourceExcerpts, got %#v", topic["sourceExcerpts"])
+	if topic["brief"] != "SQLite WAL: write-ahead logging trade-offs" {
+		t.Errorf("brief = %#v", topic["brief"])
 	}
 }
 
