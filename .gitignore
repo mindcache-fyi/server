@@ -2,6 +2,7 @@ bin/
 dist/
 tmp/
 data/
+mindcache/
 *.db
 *.db-wal
 *.db-shm
