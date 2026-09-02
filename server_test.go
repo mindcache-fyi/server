@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -397,5 +398,63 @@ func TestAnalyseUnifiedEndToEnd(t *testing.T) {
 	get := getJSON(t, base+"/v1/api/get/"+mcA)
 	if get["mainContent"] == "" {
 		t.Error("mainContent must be stored")
+	}
+}
+
+// TestMetaSyncAcrossInstances simulates two machines sharing one blob bucket
+// with separate local databases: a mindcache created on instance A must
+// appear in instance B's list once B reconciles against the bucket's
+// meta.json sidecars.
+func TestMetaSyncAcrossInstances(t *testing.T) {
+	topicsReply := `{"topics":[{"title":"Docker networking","brief":"bridge vs host modes"}]}`
+	extractReply := "## Docker networking\n\nBridge mode isolates containers from the host."
+	mock := &mockLLMServer{replies: []string{topicsReply, extractReply}}
+	llmSrv := httptest.NewServer(mock)
+	defer llmSrv.Close()
+
+	sharedDir := t.TempDir()
+	baseA := startTestApp(t, llmSrv.URL+"/v1", func(cfg *Config) {
+		cfg.StorageURL = "file://" + sharedDir
+	})
+
+	analyse := postJSON(t, baseA+"/v1/api/analyse", `{
+		"chat": {"chatId":"chat-sync","provider":"chatgpt",
+			"sourceUrl":"https://chatgpt.com/c/sync",
+			"title":"Docker chat","content":"user: Docker networking?\n\nassistant: Bridge mode isolates containers."}
+	}`)
+	topicID := analyse["topics"].([]any)[0].(map[string]any)["topicId"].(string)
+	create := postJSON(t, baseA+"/v1/api/create", `{"topicId":"`+topicID+`"}`)
+	if create["success"] != true {
+		t.Fatalf("create failed: %#v", create)
+	}
+	mcID := create["mindcacheId"].(string)
+
+	// The sidecar must exist in the shared bucket before the second
+	// instance can adopt the mindcache.
+	if _, err := os.Stat(filepath.Join(sharedDir, "mindcache", mcID, "meta.json")); err != nil {
+		t.Fatalf("meta.json not written to shared storage: %v", err)
+	}
+
+	// Instance B: same bucket, its own database.
+	baseB := startTestApp(t, llmSrv.URL+"/v1", func(cfg *Config) {
+		cfg.StorageURL = "file://" + sharedDir
+	})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		out := getJSON(t, baseB+"/v1/api/list")
+		list, _ := out["mindcaches"].([]any)
+		for _, item := range list {
+			if m, ok := item.(map[string]any); ok && m["id"] == mcID {
+				if m["brief"] != "Docker networking: bridge vs host modes" {
+					t.Fatalf("synced brief = %#v", m["brief"])
+				}
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("mindcache %s never appeared on instance B: %#v", mcID, out)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

@@ -63,6 +63,18 @@ func (r *SearchRepo) DeleteSearchDoc(ctx context.Context, id string) error {
 	return nil
 }
 
+// UpdateBrief refreshes only the brief of an indexed mindcache. It is used by
+// the metadata reconciler when a remote meta.json changes the brief but the
+// main content (and thus the indexed document's modTime) is unchanged. When no
+// document is indexed yet the update is a no-op; the next content reconcile
+// inserts it with the current brief.
+func (r *SearchRepo) UpdateBrief(ctx context.Context, id string, brief string) error {
+	if _, err := r.db.ExecContext(ctx, `UPDATE MindcacheFTS SET brief = ? WHERE mindcacheId = ?`, brief, id); err != nil {
+		return fmt.Errorf("update brief: %w", err)
+	}
+	return nil
+}
+
 // ListIndexed returns every indexed mindcache id with its stored modTime.
 func (r *SearchRepo) ListIndexed(ctx context.Context) (map[string]string, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT mindcacheId, modTime FROM MindcacheFTS`)

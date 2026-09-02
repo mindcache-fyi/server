@@ -11,6 +11,7 @@ import (
 	"github.com/mindcache-fyi/server/internal/dedup"
 	"github.com/mindcache-fyi/server/internal/model"
 	"github.com/mindcache-fyi/server/internal/store"
+	"github.com/rs/xid"
 )
 
 const extractInstructions = `You are a knowledge extraction specialist. Given a conversation and a specific topic, extract only the content that is directly relevant to that topic.
@@ -136,13 +137,29 @@ func (s *MindcacheService) doCreateFromTopic(ctx context.Context, topicId string
 		return model.Mindcache{}, err
 	}
 
-	mc, err := s.repo.Create(ctx, topic.Brief, []string{chat.SourceURL})
+	id := xid.New().String()
+	now := time.Now().UTC()
+	sourceURLs := []string{chat.SourceURL}
+
+	// Content is written before the database row so the metadata reconciler
+	// never sees a row without bucket objects (and deletes it), and the
+	// meta.json sidecar — the cross-machine source of truth for metadata —
+	// carries exactly the timestamps stored in the row.
+	if err := s.storage.Write(ctx, model.MindcacheMainPath(id), []byte(mainContent)); err != nil {
+		return model.Mindcache{}, err
+	}
+
+	mc, err := s.repo.CreateWithID(ctx, id, topic.Brief, sourceURLs, now, now)
 	if err != nil {
 		return model.Mindcache{}, err
 	}
 
-	if err := s.storage.Write(ctx, model.MindcacheMainPath(mc.ID), []byte(mainContent)); err != nil {
-		return model.Mindcache{}, err
+	if err := WriteMeta(ctx, s.storage, mc); err != nil {
+		// The row and content already exist; a missing sidecar only delays
+		// cross-machine visibility, so log and let the reconciler retry.
+		slog.Warn("write meta.json failed", "mindcache", id, "error", err)
+	} else {
+		markMetaApplied(ctx, s.repo, s.storage, id)
 	}
 
 	s.indexMindcache(ctx, mc.ID)
@@ -224,9 +241,22 @@ func (s *MindcacheService) doUpdate(ctx context.Context, mindcacheId, topicId st
 		return false, err
 	}
 
+	now := time.Now().UTC()
 	sourceUrls := appendSourceURL(mc.SourceURLs, chat.SourceURL)
-	if err := s.repo.Update(ctx, mindcacheId, integrated.Brief, sourceUrls); err != nil {
+	if err := s.repo.UpdateWithTime(ctx, mindcacheId, integrated.Brief, sourceUrls, now); err != nil {
 		return false, err
+	}
+
+	updated := *mc
+	updated.Brief = integrated.Brief
+	updated.SourceURLs = sourceUrls
+	updated.UpdatedAt = now
+	if err := WriteMeta(ctx, s.storage, &updated); err != nil {
+		// The row and content already hold the change; a missing sidecar
+		// only delays cross-machine visibility, so let the reconciler retry.
+		slog.Warn("write meta.json failed", "mindcache", mindcacheId, "error", err)
+	} else {
+		markMetaApplied(ctx, s.repo, s.storage, mindcacheId)
 	}
 
 	s.indexMindcache(ctx, mindcacheId)

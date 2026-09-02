@@ -46,6 +46,8 @@ type Mindcache struct {
 	ID string `json:"id"`
 	// Brief summary
 	Brief string `json:"brief"`
+	// Creation timestamp
+	CreatedAt time.Time `json:"createdAt"`
 	// Last update timestamp
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Source conversation URLs
@@ -147,6 +149,33 @@ type ErrorResponse struct {
 // MindcacheMainPath returns the storage path for a mindcache's main content.
 func MindcacheMainPath(id string) string {
 	return "mindcache/" + id + "/main.md"
+}
+
+// MindcacheMetaPath returns the storage path for a mindcache's meta.json
+// sidecar, the cross-machine source of truth for its metadata.
+func MindcacheMetaPath(id string) string {
+	return "mindcache/" + id + "/meta.json"
+}
+
+// MetaSuffix and MainSuffix are the per-mindcache object suffixes inside a
+// bucket listing.
+const (
+	MetaSuffix = "/meta.json"
+	MainSuffix = "/main.md"
+)
+
+// MetaSchema is the current meta.json schema version.
+const MetaSchema = 1
+
+// MetaFile is the JSON sidecar stored next to a mindcache's main content. It
+// carries the metadata fields that multiple machines must agree on, so the
+// blob bucket — not any single local database — is the source of truth.
+type MetaFile struct {
+	Schema     int       `json:"schema"`
+	Brief      string    `json:"brief"`
+	SourceURLs []string  `json:"sourceUrls"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // MindcachePrefix returns the storage prefix for a mindcache.

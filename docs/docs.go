@@ -521,6 +521,10 @@ const docTemplate = `{
                     "description": "Brief summary",
                     "type": "string"
                 },
+                "createdAt": {
+                    "description": "Creation timestamp",
+                    "type": "string"
+                },
                 "id": {
                     "description": "Unique mindcache identifier",
                     "type": "string"

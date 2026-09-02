@@ -127,9 +127,25 @@ func (r *MindcacheRepo) GetByID(ctx context.Context, id string) (*model.Mindcach
 	return m, nil
 }
 
+// sqlTime renders a timestamp in the UTC layout modernc.org/sqlite parses
+// back into time.Time, matching SQLite's own CURRENT_TIMESTAMP precision.
+func sqlTime(t time.Time) string {
+	return t.UTC().Format("2006-01-02 15:04:05.999999999")
+}
+
 // Create inserts a new mindcache with a freshly generated id and returns the
-// stored record, including the database-assigned timestamps.
+// stored record, including the assigned timestamps. It delegates to
+// CreateWithID using the current time for both timestamps.
 func (r *MindcacheRepo) Create(ctx context.Context, brief string, sourceUrls []string) (*model.Mindcache, error) {
+	now := time.Now().UTC()
+	return r.CreateWithID(ctx, xid.New().String(), brief, sourceUrls, now, now)
+}
+
+// CreateWithID inserts a new mindcache with a caller-supplied id and
+// timestamps and returns the stored record. Callers that also write a
+// meta.json sidecar pass the same timestamps so the row and the sidecar
+// agree exactly.
+func (r *MindcacheRepo) CreateWithID(ctx context.Context, id string, brief string, sourceUrls []string, createdAt, updatedAt time.Time) (*model.Mindcache, error) {
 	if sourceUrls == nil {
 		sourceUrls = []string{}
 	}
@@ -138,8 +154,9 @@ func (r *MindcacheRepo) Create(ctx context.Context, brief string, sourceUrls []s
 		return nil, fmt.Errorf("marshal sourceUrls: %w", err)
 	}
 
-	id := xid.New().String()
-	_, err = r.db.ExecContext(ctx, `INSERT INTO Mindcache (id, brief, sourceUrls) VALUES (?, ?, ?)`, id, brief, string(urlsJSON))
+	_, err = r.db.ExecContext(ctx,
+		`INSERT INTO Mindcache (id, brief, sourceUrls, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)`,
+		id, brief, string(urlsJSON), sqlTime(createdAt), sqlTime(updatedAt))
 	if err != nil {
 		return nil, fmt.Errorf("insert mindcache: %w", err)
 	}
@@ -150,6 +167,12 @@ func (r *MindcacheRepo) Create(ctx context.Context, brief string, sourceUrls []s
 // Update replaces the brief and sourceUrls of the mindcache with the given id
 // and refreshes its updatedAt timestamp.
 func (r *MindcacheRepo) Update(ctx context.Context, id string, brief string, sourceUrls []string) error {
+	return r.UpdateWithTime(ctx, id, brief, sourceUrls, time.Now().UTC())
+}
+
+// UpdateWithTime is Update with an explicit updatedAt, used by callers that
+// must keep the local row and the meta.json sidecar timestamps identical.
+func (r *MindcacheRepo) UpdateWithTime(ctx context.Context, id string, brief string, sourceUrls []string, updatedAt time.Time) error {
 	if sourceUrls == nil {
 		sourceUrls = []string{}
 	}
@@ -158,12 +181,85 @@ func (r *MindcacheRepo) Update(ctx context.Context, id string, brief string, sou
 		return fmt.Errorf("marshal sourceUrls: %w", err)
 	}
 
-	_, err = r.db.ExecContext(ctx, `UPDATE Mindcache SET brief = ?, sourceUrls = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`, brief, string(urlsJSON), id)
+	_, err = r.db.ExecContext(ctx, `UPDATE Mindcache SET brief = ?, sourceUrls = ?, updatedAt = ? WHERE id = ?`, brief, string(urlsJSON), sqlTime(updatedAt), id)
 	if err != nil {
 		return fmt.Errorf("update mindcache: %w", err)
 	}
 
 	return nil
+}
+
+// UpsertMeta applies a full metadata snapshot synced from another machine's
+// meta.json sidecar. Existing rows are overwritten; the embedding column is
+// left untouched because embeddings are rederived locally. New rows are
+// inserted so a mindcache created on one machine materialises on every other.
+func (r *MindcacheRepo) UpsertMeta(ctx context.Context, id string, brief string, sourceUrls []string, createdAt, updatedAt time.Time, metaModTime string) error {
+	if sourceUrls == nil {
+		sourceUrls = []string{}
+	}
+	urlsJSON, err := json.Marshal(sourceUrls)
+	if err != nil {
+		return fmt.Errorf("marshal sourceUrls: %w", err)
+	}
+
+	_, err = r.db.ExecContext(ctx, `
+		INSERT INTO Mindcache (id, brief, sourceUrls, createdAt, updatedAt, metaModTime)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			brief = excluded.brief,
+			sourceUrls = excluded.sourceUrls,
+			createdAt = excluded.createdAt,
+			updatedAt = excluded.updatedAt,
+			metaModTime = excluded.metaModTime`,
+		id, brief, string(urlsJSON), sqlTime(createdAt), sqlTime(updatedAt), metaModTime)
+	if err != nil {
+		return fmt.Errorf("upsert meta: %w", err)
+	}
+
+	return nil
+}
+
+// SetMetaModTime records the blob modification time of the meta.json sidecar
+// this machine last wrote, so the reconciler treats its own write as applied.
+func (r *MindcacheRepo) SetMetaModTime(ctx context.Context, id string, metaModTime string) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE Mindcache SET metaModTime = ? WHERE id = ?`, metaModTime, id)
+	if err != nil {
+		return fmt.Errorf("set metaModTime: %w", err)
+	}
+	return nil
+}
+
+// SyncState is the per-mindcache bookkeeping the metadata reconciler needs to
+// compare the local database against the blob bucket.
+type SyncState struct {
+	UpdatedAt   time.Time
+	MetaModTime string
+}
+
+// ListSyncState returns the sync bookkeeping of every mindcache keyed by id.
+func (r *MindcacheRepo) ListSyncState(ctx context.Context) (map[string]SyncState, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id, updatedAt, metaModTime FROM Mindcache`)
+	if err != nil {
+		return nil, fmt.Errorf("query sync state: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make(map[string]SyncState)
+	for rows.Next() {
+		var (
+			id          string
+			updatedAt   time.Time
+			metaModTime sql.NullString
+		)
+		if err := rows.Scan(&id, &updatedAt, &metaModTime); err != nil {
+			return nil, fmt.Errorf("scan sync state: %w", err)
+		}
+		out[id] = SyncState{UpdatedAt: updatedAt, MetaModTime: metaModTime.String}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sync state: %w", err)
+	}
+	return out, nil
 }
 
 // Delete removes the mindcache with the given id. Deleting a non-existent id
@@ -218,9 +314,8 @@ func scanMindcache(s scanner) (*model.Mindcache, error) {
 	var (
 		m          model.Mindcache
 		sourceUrls string
-		createdAt  time.Time
 	)
-	if err := s.Scan(&m.ID, &m.Brief, &sourceUrls, &createdAt, &m.UpdatedAt); err != nil {
+	if err := s.Scan(&m.ID, &m.Brief, &sourceUrls, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, fmt.Errorf("scan mindcache: %w", err)
 	}
 

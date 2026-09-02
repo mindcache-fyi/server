@@ -6,7 +6,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// DefaultSyncInterval is how often the server reconciles local mindcache
+// metadata against the meta.json sidecars in the blob bucket.
+const DefaultSyncInterval = 60 * time.Second
 
 // Config holds all configuration for a server instance.
 type Config struct {
@@ -37,6 +42,11 @@ type Config struct {
 	// calls: extraction then matching) or "unified" (experimental, a single
 	// call producing topics with their matches).
 	AnalyseMode string
+	// SyncInterval controls how often the server reconciles local mindcache
+	// metadata against the meta.json sidecars in the blob bucket, which is
+	// what keeps several machines sharing one bucket consistent. Values <= 0
+	// fall back to DefaultSyncInterval.
+	SyncInterval time.Duration
 
 	// PublicFS optionally overrides the on-disk public/ directory for
 	// static content served at the site root (e.g. an embedded SPA).
@@ -57,21 +67,22 @@ func LoadConfigFromEnv() (*Config, error) {
 	}
 
 	c := &Config{
-		Env:               env,
-		Port:              getEnv("PORT", "9000"),
-		DBPath:            getEnv("DB_PATH", defaultDBPath),
-		StorageURL:        getEnv("STORAGE_URL", defaultStorageURL),
-		LLMBaseURL:        getEnv("LLM_BASE_URL", ""),
-		LLMAPIKey:         getEnv("LLM_API_KEY", "local"),
-		LLMModel:          getEnv("LLM_MODEL", ""),
-		LLMMaxConcurrency: getEnvInt("LLM_MAX_CONCURRENCY", 1),
-		LLMMaxInputChars:  getEnvInt("LLM_MAX_INPUT_CHARS", 100000),
-		EmbedBaseURL:      getEnv("EMBED_BASE_URL", ""),
-		EmbedAPIKey:       getEnv("EMBED_API_KEY", ""),
-		EmbedModel:        getEnv("EMBED_MODEL", ""),
+		Env:                env,
+		Port:               getEnv("PORT", "9000"),
+		DBPath:             getEnv("DB_PATH", defaultDBPath),
+		StorageURL:         getEnv("STORAGE_URL", defaultStorageURL),
+		LLMBaseURL:         getEnv("LLM_BASE_URL", ""),
+		LLMAPIKey:          getEnv("LLM_API_KEY", "local"),
+		LLMModel:           getEnv("LLM_MODEL", ""),
+		LLMMaxConcurrency:  getEnvInt("LLM_MAX_CONCURRENCY", 1),
+		LLMMaxInputChars:   getEnvInt("LLM_MAX_INPUT_CHARS", 100000),
+		EmbedBaseURL:       getEnv("EMBED_BASE_URL", ""),
+		EmbedAPIKey:        getEnv("EMBED_API_KEY", ""),
+		EmbedModel:         getEnv("EMBED_MODEL", ""),
 		MatchCandidateK:    getEnvInt("MATCH_CANDIDATE_K", 5),
 		MinEmbedCollection: getEnvInt("EMBED_MIN_COLLECTION", 30),
 		AnalyseMode:        getEnv("ANALYSE_MODE", ""),
+		SyncInterval:       time.Duration(getEnvInt("SYNC_INTERVAL_SECONDS", int(DefaultSyncInterval/time.Second))) * time.Second,
 	}
 
 	if c.IsDev() {

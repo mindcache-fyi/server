@@ -37,6 +37,10 @@ type App struct {
 // LLM client, services, and the HTTP router). The returned App is not started;
 // call Start to begin serving.
 func New(cfg *Config) (*App, error) {
+	if cfg.SyncInterval <= 0 {
+		cfg.SyncInterval = DefaultSyncInterval
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -80,6 +84,7 @@ func New(cfg *Config) (*App, error) {
 	searchRepo := store.NewSearchRepo(db)
 	searchSvc := service.NewSearchIndexService(repo, searchRepo, storage)
 	mindcacheSvc := service.NewMindcacheService(repo, storage, llm, kv, cfg.LLMMaxInputChars, embedder, searchSvc)
+	metaSync := service.NewMetaSyncService(repo, searchRepo, storage, embedder)
 
 	if embedder != nil {
 		go service.BackfillEmbeddings(context.Background(), repo, embedder)
@@ -87,6 +92,9 @@ func New(cfg *Config) (*App, error) {
 	// Bring the full-text index up to date with the blob content in the
 	// background; write-through hooks keep it fresh afterwards.
 	go searchSvc.Reconcile(context.Background())
+	// Reconcile mindcache metadata against the bucket's meta.json sidecars
+	// so several machines sharing one storage stay consistent.
+	go metaSync.RunLoop(context.Background(), cfg.SyncInterval)
 
 	healthH := handler.NewHealthHandler(db, storage, llm)
 	analyseH := handler.NewAnalyseHandler(analyseSvc)

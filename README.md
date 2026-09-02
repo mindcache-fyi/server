@@ -67,8 +67,32 @@ All configuration is via environment variables:
 | `LLM_API_KEY` | LLM API key | `local` |
 | `LLM_MODEL` | LLM model name | — |
 | `LLM_MAX_CONCURRENCY` | Max concurrent LLM calls | `1` |
+| `SYNC_INTERVAL_SECONDS` | How often metadata is reconciled against the blob bucket | `60` |
 
 Run `./server --help` for an overview.
+
+## Multi-machine sync
+
+Several machines (e.g. one desktop app install per computer) can share a
+single blob bucket — point every instance's `STORAGE_URL` at the same
+`file://`, `s3://`, or `gs://` bucket while each keeps its own local SQLite
+database.
+
+Each mindcache's metadata (brief, source URLs, timestamps) is written as a
+`meta.json` sidecar next to its `main.md` in the bucket, which is the source
+of truth. Every instance periodically reconciles its local database against
+those sidecars: new and updated mindcaches are adopted, deletions propagate,
+and legacy content without a sidecar gets one seeded automatically. Conflict
+resolution is last-write-wins, arbitrated by the sidecar's modification time
+in the bucket rather than by machine clocks.
+
+Notes:
+
+- Sync is eventual; changes appear on other machines within one sync
+  interval (`SYNC_INTERVAL_SECONDS`).
+- Embeddings and the full-text index are derived locally on each machine.
+- Concurrent updates of the same mindcache from two machines within the same
+  interval: the later bucket write wins.
 
 ## API
 

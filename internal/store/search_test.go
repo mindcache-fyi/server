@@ -104,6 +104,31 @@ func TestSearchSubstrCoversShortCJKQueries(t *testing.T) {
 	}
 }
 
+func TestUpdateBriefRefreshesIndexedBrief(t *testing.T) {
+	repo := newTestSearchRepo(t)
+	ctx := context.Background()
+
+	if err := repo.UpsertSearchDoc(ctx, "id1", "2026-01-01T00:00:00Z", "old brief", "content stays"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := repo.UpdateBrief(ctx, "id1", "new brief"); err != nil {
+		t.Fatalf("UpdateBrief: %v", err)
+	}
+
+	hits, err := repo.SearchSubstr(ctx, "new brief", 10)
+	if err != nil {
+		t.Fatalf("SearchSubstr: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Brief != "new brief" {
+		t.Fatalf("hits = %+v, want refreshed brief", hits)
+	}
+
+	// Unknown ids are a no-op, not an error.
+	if err := repo.UpdateBrief(ctx, "ghost", "whatever"); err != nil {
+		t.Fatalf("UpdateBrief unknown: %v", err)
+	}
+}
+
 func TestDeleteSearchDocIsIdempotent(t *testing.T) {
 	repo := newTestSearchRepo(t)
 	ctx := context.Background()
