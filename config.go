@@ -23,6 +23,14 @@ type Config struct {
 	LLMAPIKey         string
 	LLMModel          string
 	LLMMaxConcurrency int
+	// LLMGatewaySalt is the pre-shared HMAC salt used to sign LLM requests
+	// for a trusted gateway (e.g. MindCache Try). When empty, requests are
+	// unsigned, preserving the original behaviour for user-supplied (BYOK)
+	// endpoints.
+	LLMGatewaySalt string
+	// LLMDeviceID identifies this installation to the gateway's rate limiter
+	// and is sent alongside the signature. Only used when LLMGatewaySalt is set.
+	LLMDeviceID string
 	// LLMMaxInputChars caps conversation text sent to the LLM per call.
 	// Values <= 0 disable the cap.
 	LLMMaxInputChars int
@@ -76,6 +84,8 @@ func LoadConfigFromEnv() (*Config, error) {
 		LLMModel:           getEnv("LLM_MODEL", ""),
 		LLMMaxConcurrency:  getEnvInt("LLM_MAX_CONCURRENCY", 1),
 		LLMMaxInputChars:   getEnvInt("LLM_MAX_INPUT_CHARS", 100000),
+		LLMGatewaySalt:     getEnv("LLM_GATEWAY_SALT", ""),
+		LLMDeviceID:        getEnv("LLM_DEVICE_ID", ""),
 		EmbedBaseURL:       getEnv("EMBED_BASE_URL", ""),
 		EmbedAPIKey:        getEnv("EMBED_API_KEY", ""),
 		EmbedModel:         getEnv("EMBED_MODEL", ""),

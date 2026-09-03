@@ -139,7 +139,7 @@ func TestNewEmbedder_ProbeSuccess(t *testing.T) {
 	srv := httptest.NewServer(mock)
 	defer srv.Close()
 
-	e := NewEmbedder(srv.URL+"/v1", "key", "test-embed", 1)
+	e := NewEmbedder(srv.URL+"/v1", "key", "test-embed", 1, nil)
 	if e == nil {
 		t.Fatal("expected enabled embedder after successful probe")
 	}
@@ -162,13 +162,13 @@ func TestNewEmbedder_ProbeFailureDisables(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if e := NewEmbedder(srv.URL+"/v1", "key", "test-embed", 1); e != nil {
+	if e := NewEmbedder(srv.URL+"/v1", "key", "test-embed", 1, nil); e != nil {
 		t.Error("expected nil embedder after failed probe")
 	}
 }
 
 func TestNewEmbedder_UnconfiguredDisables(t *testing.T) {
-	if e := NewEmbedder("", "key", "", 1); e != nil {
+	if e := NewEmbedder("", "key", "", 1, nil); e != nil {
 		t.Error("expected nil embedder without model/baseURL")
 	}
 }

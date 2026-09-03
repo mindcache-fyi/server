@@ -99,7 +99,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	llm, err := service.NewLLMClient(baseURL, apiKey, llmModel, 1, false)
+	llm, err := service.NewLLMClient(baseURL, apiKey, llmModel, 1, false, nil)
 	if err != nil {
 		fatalf("create LLM client: %v", err)
 	}

@@ -104,8 +104,10 @@ func prettyJSON(data []byte) string {
 }
 
 // NewLLMClient creates an LLMClient for the given OpenAI-compatible endpoint.
-// When verbose is true, full request/response bodies are logged (development only).
-func NewLLMClient(baseURL, apiKey, model string, maxConcurrency int, verbose bool) (*LLMClient, error) {
+// When verbose is true, full request/response bodies are logged (development
+// only). A non-nil signer adds HMAC gateway headers to every request; nil
+// keeps plain BYOK behaviour.
+func NewLLMClient(baseURL, apiKey, model string, maxConcurrency int, verbose bool, signer *RequestSigner) (*LLMClient, error) {
 	if baseURL == "" {
 		return nil, errors.New("llm: baseURL is required")
 	}
@@ -113,11 +115,15 @@ func NewLLMClient(baseURL, apiKey, model string, maxConcurrency int, verbose boo
 		return nil, errors.New("llm: model is required")
 	}
 
-	var httpClient *http.Client
+	var transport http.RoundTripper = http.DefaultTransport
 	if verbose {
-		httpClient = &http.Client{
-			Transport: &loggingTransport{next: http.DefaultTransport},
-		}
+		transport = &loggingTransport{next: transport}
+	}
+	transport = signer.Transport(transport)
+
+	var httpClient *http.Client
+	if verbose || signer != nil {
+		httpClient = &http.Client{Transport: transport}
 	}
 
 	opts := []compat.Option{

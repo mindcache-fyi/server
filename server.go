@@ -57,6 +57,8 @@ func New(cfg *Config) (*App, error) {
 
 	kv := cache.NewKVCache()
 
+	signer := service.NewRequestSigner(cfg.LLMGatewaySalt, cfg.LLMDeviceID)
+
 	storage, err := service.NewStorage(context.Background(), cfg.StorageURL)
 	if err != nil {
 		kv.Stop()
@@ -64,7 +66,7 @@ func New(cfg *Config) (*App, error) {
 		return nil, err
 	}
 
-	llm, err := service.NewLLMClient(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel, cfg.LLMMaxConcurrency, cfg.IsDev())
+	llm, err := service.NewLLMClient(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel, cfg.LLMMaxConcurrency, cfg.IsDev(), signer)
 	if err != nil {
 		_ = storage.Close()
 		kv.Stop()
@@ -77,7 +79,7 @@ func New(cfg *Config) (*App, error) {
 	// Optional embedding endpoint for retrieval-augmented matching. NewEmbedder
 	// probes once and returns nil when unconfigured or unreachable, so the
 	// feature degrades to full-list matching without any extra conditionals.
-	embedder := service.NewEmbedder(cfg.EmbedBaseURL, cfg.EmbedAPIKey, cfg.EmbedModel, cfg.LLMMaxConcurrency)
+	embedder := service.NewEmbedder(cfg.EmbedBaseURL, cfg.EmbedAPIKey, cfg.EmbedModel, cfg.LLMMaxConcurrency, signer)
 
 	analyseSvc := service.NewAnalyseService(kv, repo, llm, cfg.LLMMaxInputChars, embedder, repo, cfg.MatchCandidateK, cfg.MinEmbedCollection, cfg.AnalyseMode)
 

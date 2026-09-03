@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/mindcache-fyi/server/internal/model"
@@ -37,16 +38,24 @@ var _ EmbeddingsProvider = (*Embedder)(nil)
 // NewEmbedder creates an Embedder and probes the endpoint once. It returns
 // nil (feature disabled) when model or baseURL is empty, or when the probe
 // fails — embeddings are an optional enhancement and must never break start.
-// The return type is the interface so the disabled state is a true nil.
-func NewEmbedder(baseURL, apiKey, model string, maxConcurrency int) EmbeddingsProvider {
+// The return type is the interface so the disabled state is a true nil. A
+// non-nil signer adds HMAC gateway headers; nil keeps plain BYOK behaviour.
+func NewEmbedder(baseURL, apiKey, model string, maxConcurrency int, signer *RequestSigner) EmbeddingsProvider {
 	if baseURL == "" || model == "" {
 		return nil
 	}
 
-	m := compat.Embedding(model,
+	opts := []compat.Option{
 		compat.WithBaseURL(baseURL),
 		compat.WithAPIKey(apiKey),
-	)
+	}
+	if signer != nil {
+		opts = append(opts, compat.WithHTTPClient(&http.Client{
+			Transport: signer.Transport(nil),
+		}))
+	}
+
+	m := compat.Embedding(model, opts...)
 
 	probeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
