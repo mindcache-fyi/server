@@ -81,7 +81,7 @@ func TestSigningTransport_SignsRequestAndPreservesBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if got.body != reqBody {
 		t.Fatalf("body = %q, want %q", got.body, reqBody)
@@ -118,7 +118,7 @@ func TestSigningTransport_EmptyBodySignsEmptyHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	want := SignPayload("test-shared-salt", http.MethodGet, "/v1/models", ts, nonce, "", nil)
 	if sig != want {

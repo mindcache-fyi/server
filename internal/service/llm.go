@@ -115,7 +115,7 @@ func NewLLMClient(baseURL, apiKey, model string, maxConcurrency int, verbose boo
 		return nil, errors.New("llm: model is required")
 	}
 
-	var transport http.RoundTripper = http.DefaultTransport
+	transport := http.DefaultTransport
 	if verbose {
 		transport = &loggingTransport{next: transport}
 	}
