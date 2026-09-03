@@ -1,17 +1,34 @@
 # MindCache FYI — Server
 
+[![CI](https://github.com/mindcache-fyi/server/actions/workflows/ci.yml/badge.svg)](https://github.com/mindcache-fyi/server/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
 The knowledge-capture backend for [MindCache FYI](https://mindcache.fyi). It
 receives raw web/chat context captured by the [browser extension](https://github.com/mindcache-fyi/extension),
 uses an LLM to distill it into lasting knowledge entries ("mindcaches"), and
 serves them back through a simple REST API with a built-in API explorer.
 
+Everything runs on your own hardware with your own LLM keys — see the
+[self-hosting guide](https://mindcache.fyi/guides/self-hosting/) for the
+bigger picture, or the [quick start](https://mindcache.fyi/start/quick-start/)
+to be up and running in minutes.
+
 ## Features
 
 - **LLM analysis** — captured content is summarized into structured knowledge
-  using any OpenAI-compatible endpoint (OpenAI, DeepSeek, Ollama, vLLM, llama.cpp, ...)
+  using any OpenAI-compatible endpoint (OpenAI, DeepSeek, Ollama, vLLM, llama.cpp, ...);
+  two focused calls per capture (`staged` mode) or a single-call experimental
+  `unified` mode via `ANALYSE_MODE`
 - **Deduplication** — content-hash checks plus an LLM relevance judge keep your
   knowledge base free of duplicates, with in-flight request coalescing via
   singleflight
+- **Full-text search** — a locally maintained index over all mindcache content
+- **Optional embeddings** — with `EMBED_MODEL` set, retrieval-based matching
+  narrows candidates by similarity before the LLM match call, so collections
+  with hundreds of notes keep matching fast and accurate; falls back to the
+  full list automatically when unconfigured or unreachable
+- **Multi-machine sync** — share one blob bucket across machines; metadata
+  sidecars are reconciled in the background (see below)
 - **Pure Go** — no CGO required; SQLite via `modernc.org/sqlite`, so a single
   static binary is all you need
 - **Pluggable storage** — blob storage driven by a URL
@@ -22,28 +39,6 @@ serves them back through a simple REST API with a built-in API explorer.
 
 ## Quick Start
 
-### Pre-built binaries
-
-Download a binary for your platform from
-[GitHub Releases](https://github.com/mindcache-fyi/server/releases), then:
-
-```bash
-LLM_BASE_URL=http://localhost:11434/v1 ./server
-```
-
-The server listens on `http://localhost:9000` by default. In production mode
-the database and blob storage default to `./mindcache.db` and `file://.` in the
-current directory.
-
-### Docker
-
-```bash
-docker run -p 9000:9000 \
-  -e LLM_BASE_URL=http://host.docker.internal:11434/v1 \
-  -v mindcache-data:/data \
-  ghcr.io/mindcache-fyi/server
-```
-
 ### From source
 
 ```bash
@@ -52,7 +47,30 @@ cd server
 make build        # binary at bin/server
 ```
 
-Requires Go 1.25+.
+Then run it against any OpenAI-compatible endpoint:
+
+```bash
+LLM_BASE_URL=http://localhost:11434/v1 ./bin/server
+```
+
+The server listens on `http://localhost:9000` by default. In production mode
+the database and blob storage default to `./mindcache.db` and `file://.` in the
+current directory.
+
+### Docker
+
+The repo ships a Dockerfile (multi-stage, distroless runtime). Build the
+image yourself and run it:
+
+```bash
+docker build -t mindcache-server .
+docker run -p 9000:9000 \
+  -e LLM_BASE_URL=http://host.docker.internal:11434/v1 \
+  -v mindcache-data:/data \
+  mindcache-server
+```
+
+Requires Go 1.25+ to build from source.
 
 ## Configuration
 
@@ -67,13 +85,23 @@ All configuration is via environment variables:
 | `LLM_API_KEY` | LLM API key | `local` |
 | `LLM_MODEL` | LLM model name | — |
 | `LLM_MAX_CONCURRENCY` | Max concurrent LLM calls | `1` |
+| `LLM_MAX_INPUT_CHARS` | Cap on conversation text sent to the LLM per call (≤0 disables) | `100000` |
+| `ANALYSE_MODE` | Analysis pipeline: `staged` (two calls) or `unified` (experimental, one call per capture) | `staged` |
+| `EMBED_BASE_URL` | Optional embeddings endpoint for retrieval-based matching | falls back to `LLM_BASE_URL` |
+| `EMBED_API_KEY` | API key for the embeddings endpoint | falls back to `LLM_API_KEY` |
+| `EMBED_MODEL` | Embedding model name — enables retrieval-based matching | empty (disabled) |
+| `MATCH_CANDIDATE_K` | Retrieval candidates sent to the LLM per topic | `5` |
+| `EMBED_MIN_COLLECTION` | Collection size above which retrieval is used | `30` |
 | `SYNC_INTERVAL_SECONDS` | How often metadata is reconciled against the blob bucket | `60` |
+
+Model and provider guidance lives in
+[Choosing an LLM](https://mindcache.fyi/guides/choosing-an-llm/) in the docs.
 
 Run `./server --help` for an overview.
 
 ## Multi-machine sync
 
-Several machines (e.g. one desktop app install per computer) can share a
+Several machines (e.g. one install per computer) can share a
 single blob bucket — point every instance's `STORAGE_URL` at the same
 `file://`, `s3://`, or `gs://` bucket while each keeps its own local SQLite
 database.
@@ -102,6 +130,7 @@ Notes:
 | POST | `/v1/api/analyse` | Analyse captured content into mindcaches |
 | GET | `/v1/api/list` | List mindcaches |
 | GET | `/v1/api/get/{id}` | Get a mindcache with its full content |
+| GET | `/v1/api/search` | Full-text search across mindcaches (`?q=`) |
 | POST | `/v1/api/create` | Create a mindcache |
 | POST | `/v1/api/update` | Update a mindcache |
 | DELETE | `/v1/api/delete/{id}` | Delete a mindcache |
