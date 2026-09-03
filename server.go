@@ -26,6 +26,7 @@ import (
 // App is a fully wired MindCache server instance.
 type App struct {
 	cfg     *Config
+	cancel  context.CancelFunc
 	srv     *http.Server
 	ln      net.Listener
 	kv      *cache.KVCache
@@ -45,22 +46,31 @@ func New(cfg *Config) (*App, error) {
 		return nil, err
 	}
 
+	// bgCtx governs every background loop; Shutdown cancels it so the loops
+	// stop before the database and storage are closed.
+	bgCtx, cancel := context.WithCancel(context.Background())
+
 	db, err := store.OpenSQLite(cfg.DBPath)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 
 	if err := store.RunMigrations(db); err != nil {
+		cancel()
 		_ = db.Close()
 		return nil, err
 	}
 
 	kv := cache.NewKVCache()
 
+	// signer is nil unless a gateway salt is configured, keeping BYOK
+	// endpoints on their original unsigned behaviour.
 	signer := service.NewRequestSigner(cfg.LLMGatewaySalt, cfg.LLMDeviceID)
 
 	storage, err := service.NewStorage(context.Background(), cfg.StorageURL)
 	if err != nil {
+		cancel()
 		kv.Stop()
 		_ = db.Close()
 		return nil, err
@@ -68,6 +78,7 @@ func New(cfg *Config) (*App, error) {
 
 	llm, err := service.NewLLMClient(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel, cfg.LLMMaxConcurrency, cfg.IsDev(), signer)
 	if err != nil {
+		cancel()
 		_ = storage.Close()
 		kv.Stop()
 		_ = db.Close()
@@ -89,14 +100,14 @@ func New(cfg *Config) (*App, error) {
 	metaSync := service.NewMetaSyncService(repo, searchRepo, storage, embedder)
 
 	if embedder != nil {
-		go service.BackfillEmbeddings(context.Background(), repo, embedder)
+		go service.BackfillEmbeddings(bgCtx, repo, embedder)
 	}
 	// Bring the full-text index up to date with the blob content in the
 	// background; write-through hooks keep it fresh afterwards.
-	go searchSvc.Reconcile(context.Background())
+	go searchSvc.Reconcile(bgCtx)
 	// Reconcile mindcache metadata against the bucket's meta.json sidecars
 	// so several machines sharing one storage stay consistent.
-	go metaSync.RunLoop(context.Background(), cfg.SyncInterval)
+	go metaSync.RunLoop(bgCtx, cfg.SyncInterval)
 
 	healthH := handler.NewHealthHandler(db, storage, llm)
 	analyseH := handler.NewAnalyseHandler(analyseSvc)
@@ -153,6 +164,7 @@ func New(cfg *Config) (*App, error) {
 
 	return &App{
 		cfg:     cfg,
+		cancel:  cancel,
 		srv:     &http.Server{Handler: r},
 		kv:      kv,
 		storage: storage,
@@ -198,6 +210,9 @@ func (a *App) Port() string {
 // and database.
 func (a *App) Shutdown(ctx context.Context) error {
 	slog.Info("server shutting down")
+	// Stop the background loops first so they cannot touch the database or
+	// storage after those are closed below.
+	a.cancel()
 	err := a.srv.Shutdown(ctx)
 	a.kv.Stop()
 	if cerr := a.storage.Close(); cerr != nil && err == nil {

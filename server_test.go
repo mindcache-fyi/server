@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -66,6 +67,70 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 	}
 	if _, err := New(cfg); err == nil {
 		t.Fatal("expected error for missing LLM config in production")
+	}
+}
+
+// lockedBuffer is a concurrency-safe sink for slog output written by
+// background goroutines.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// TestShutdownStopsBackgroundLoops guards against the regression where the
+// background loops kept running after Shutdown closed the database, logging
+// "sql: database is closed" on every sync tick.
+func TestShutdownStopsBackgroundLoops(t *testing.T) {
+	var buf lockedBuffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	cfg := &Config{
+		Env:               "production",
+		Port:              "0",
+		DBPath:            filepath.Join(t.TempDir(), "test.db"),
+		StorageURL:        "mem://",
+		LLMBaseURL:        "http://127.0.0.1:9/v1",
+		LLMModel:          "test-model",
+		LLMMaxConcurrency: 1,
+		SyncInterval:      10 * time.Millisecond,
+	}
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := app.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := app.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	// With the loops cancelled the error count must stabilise; a leaked
+	// loop keeps hitting the closed database on every tick.
+	time.Sleep(100 * time.Millisecond)
+	before := strings.Count(buf.String(), "database is closed")
+	time.Sleep(200 * time.Millisecond)
+	after := strings.Count(buf.String(), "database is closed")
+	if after > before {
+		t.Fatalf("background loops kept hitting the closed database after Shutdown (errors %d -> %d)", before, after)
 	}
 }
 
