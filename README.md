@@ -115,7 +115,8 @@ API explorer.
 make dev          # development mode with hot config
 make dev-air      # development mode with hot reload (requires air)
 make test         # run tests with race detector
-make lint         # run golangci-lint
+make lint         # run golangci-lint (auto-installs via go run if missing)
+make hooks        # opt in to the pre-commit lint hook
 make swagger      # regenerate Swagger docs from annotations
 ```
 

@@ -2,7 +2,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 LDFLAGS  = -ldflags "-s -w -X main.Version=$(VERSION) -X main.GitCommit=$(COMMIT)"
 
-.PHONY: build test lint dev clean swagger release eval
+.PHONY: build test lint hooks dev clean swagger release eval
 
 build:
 	go build $(LDFLAGS) -o bin/server ./cmd/server
@@ -13,8 +13,22 @@ test:
 test-short:
 	go test ./... -race -short
 
+# Pinned to the version the fallback installs; CI tracks latest, so bump
+# this when CI starts failing on a newer rule.
+GOLANGCI_LINT_VERSION ?= v2.13.2
+
 lint:
-	golangci-lint run ./...
+	if command -v golangci-lint >/dev/null 2>&1; then \
+		golangci-lint run ./...; \
+	else \
+		echo "golangci-lint not found, running v$(GOLANGCI_LINT_VERSION) via go run..."; \
+		go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...; \
+	fi
+
+# Opt in to the pre-commit lint hook (githooks/pre-commit). Re-run after
+# cloning or when hooks change.
+hooks:
+	git config core.hooksPath githooks
 
 AIR ?= $(shell go env GOPATH)/bin/air
 
