@@ -16,14 +16,15 @@ import (
 	"gocloud.dev/blob"
 
 	_ "gocloud.dev/blob/fileblob"
+	_ "gocloud.dev/blob/gcsblob"
 	_ "gocloud.dev/blob/memblob"
 	_ "gocloud.dev/blob/s3blob"
 )
 
 // Storage is a blob-backed object store addressed by slash-separated keys.
-// The concrete backend (local filesystem, S3, in-memory) is selected by the
-// URL passed to NewStorage, so switching deployment targets requires no code
-// changes.
+// The concrete backend (local filesystem, S3, Google Cloud Storage,
+// in-memory) is selected by the URL passed to NewStorage, so switching
+// deployment targets requires no code changes.
 type Storage struct {
 	bucket    *blob.Bucket
 	localRoot string
