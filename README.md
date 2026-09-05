@@ -80,7 +80,7 @@ All configuration is via environment variables:
 |---|---|---|
 | `PORT` | Listen port | `9000` |
 | `DB_PATH` | SQLite database path | `mindcache.db` |
-| `STORAGE_URL` | Blob storage URL (`file://`, `s3://`, `gs://`, `azblob://`) | `file://.` |
+| `STORAGE_URL` | Blob storage URL (`file://`, `s3://`, `gs://`) — see [S3 storage credentials](#s3-storage-credentials) | `file://.` |
 | `LLM_BASE_URL` | OpenAI-compatible LLM endpoint | — |
 | `LLM_API_KEY` | LLM API key | `local` |
 | `LLM_MODEL` | LLM model name | — |
@@ -96,6 +96,30 @@ All configuration is via environment variables:
 
 Model and provider guidance lives in
 [Choosing an LLM](https://mindcache.fyi/guides/choosing-an-llm/) in the docs.
+
+### S3 storage credentials
+
+`s3://` URLs carry no credentials — the AWS SDK resolves them from the
+standard chain: the `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment
+variables (optionally `AWS_SESSION_TOKEN` or `AWS_PROFILE`), a shared
+`~/.aws` configuration, or the instance role on EC2/ECS. Everything else
+about the bucket is configured through URL query parameters:
+
+```bash
+# AWS S3
+STORAGE_URL='s3://my-bucket?region=us-east-1'
+
+# Cloudflare R2
+STORAGE_URL='s3://my-bucket?region=auto&endpoint=https://<account-id>.r2.cloudflarestorage.com'
+
+# MinIO (path-style addressing is usually required)
+STORAGE_URL='s3://my-bucket?region=us-east-1&endpoint=http://localhost:9000&use_path_style=true'
+```
+
+Public buckets can pass `anonymous=true` instead of credentials. `gs://`
+likewise carries no credentials in the URL: it uses Google Application
+Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` or the ambient
+service account).
 
 Run `./server --help` for an overview.
 
